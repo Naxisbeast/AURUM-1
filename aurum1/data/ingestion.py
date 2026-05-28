@@ -786,10 +786,14 @@ class AurumDataIngestor:
         non-commercial fields.
         """
 
-        frame = pd.read_csv(io.StringIO(raw_csv))
+        frame = pd.read_csv(io.StringIO(raw_csv), low_memory=False)
         if frame.empty:
             return self._empty_frame(COT_COLUMNS)
         column_map = {_normalize_column_name(column): column for column in frame.columns}
+        if not any(candidate in column_map for candidate in ["market_and_exchange_names", "market", "market_name"]):
+            frame = self._read_headerless_disaggregated_cot(raw_csv)
+            column_map = {_normalize_column_name(column): column for column in frame.columns}
+
         market_col = self._find_column(column_map, ["market_and_exchange_names", "market", "market_name"])
         date_col = self._find_column(column_map, ["report_date_as_yyyy_mm_dd", "report_date", "date"])
         open_interest_col = self._find_column(column_map, ["open_interest_all", "open_interest"])
@@ -825,6 +829,34 @@ class AurumDataIngestor:
         gold["source"] = "cftc"
         result = gold[COT_COLUMNS].sort_values("report_date").reset_index(drop=True)
         return self._ensure_columns(result, COT_COLUMNS)
+
+    def _read_headerless_disaggregated_cot(self, raw_csv: str) -> pd.DataFrame:
+        """Read CFTC historical disaggregated text rows without a header.
+
+        The official CFTC historical compressed files document
+        ``Market_and_Exchange_Names`` as field 1, ``As_of_Date_Form_YYYY-MM-DD``
+        as field 3, ``Open_Interest_All`` as field 8, and managed-money long
+        and short positions as fields 14 and 15.
+        """
+
+        frame = pd.read_csv(io.StringIO(raw_csv), header=None, low_memory=False)
+        if frame.empty:
+            return self._empty_frame(COT_COLUMNS)
+        required_index = 14
+        if frame.shape[1] <= required_index:
+            raise ProviderError(
+                "Headerless CFTC disaggregated file has too few columns; "
+                f"expected at least {required_index + 1}, found {frame.shape[1]}"
+            )
+        return pd.DataFrame(
+            {
+                "Market_and_Exchange_Names": frame.iloc[:, 0],
+                "Report_Date_as_YYYY-MM-DD": frame.iloc[:, 2],
+                "Open_Interest_All": frame.iloc[:, 7],
+                "M_Money_Positions_Long_All": frame.iloc[:, 13],
+                "M_Money_Positions_Short_All": frame.iloc[:, 14],
+            }
+        )
 
     def _parse_economic_calendar(self, html: str) -> pd.DataFrame:
         events = self._calendar_events_from_data_attributes(html)
