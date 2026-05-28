@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import argparse
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -18,20 +19,35 @@ if str(ROOT) not in sys.path:
 
 from aurum1.backtesting import BacktestEngine, WalkForwardValidator, run_ablation_backtest, run_monte_carlo
 from aurum1.backtesting.report import plot_equity_curve, print_backtest_report, save_backtest_report
-from aurum1.data.ingestion import DEFAULT_OANDA_BACKTEST_COUNT, MACRO_NUMERIC_COLUMNS, AurumDataIngestor, load_settings
+from aurum1.data.ingestion import (
+    DEFAULT_OANDA_BACKTEST_COUNT,
+    MACRO_NUMERIC_COLUMNS,
+    AurumDataIngestor,
+    load_cot,
+    load_macro,
+    load_ohlcv,
+    load_settings,
+)
 from aurum1.features.engineer import FeatureEngineer
 from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
 from aurum1.signals import MachineMode
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    args = parse_args(argv)
+    load_dotenv(ROOT / ".env")
+
     settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
-    ohlcv, data_label = load_backtest_ohlcv(settings)
-    macro, macro_status = load_backtest_macro(settings, ohlcv)
-    cot, cot_status = synthetic_cot_for(ohlcv), "placeholder"
+    ohlcv, data_label = load_backtest_ohlcv(
+        settings,
+        allow_proxy=args.allow_gold_futures_proxy,
+        allow_synthetic=args.allow_synthetic,
+    )
+    macro, macro_status = load_backtest_macro(settings, ohlcv, allow_placeholder=args.allow_placeholder_data)
+    cot, cot_status = load_backtest_cot(settings, ohlcv, allow_placeholder=args.allow_placeholder_data)
     settings = tune_backtest_windows(settings, len(ohlcv))
 
     reports_dir = ROOT / "reports"
@@ -97,6 +113,40 @@ def main() -> int:
     return 0
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run AURUM-1 real-market backtest.")
+    parser.add_argument(
+        "--allow-gold-futures-proxy",
+        action="store_true",
+        help="Allow GC=F futures proxy when real OANDA XAU_USD is unavailable.",
+    )
+    parser.add_argument(
+        "--allow-placeholder-data",
+        action="store_true",
+        help="Allow synthetic macro/COT placeholders for plumbing checks.",
+    )
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Allow synthetic OHLCV fallback for plumbing checks only.",
+    )
+    return parser.parse_args(argv)
+
+
+def load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def print_promotion_gate(walk_forward: Any) -> None:
     status = "PASSED" if walk_forward.promotion_gate_passed else "FAILED"
     detail = walk_forward.criteria_detail
@@ -134,19 +184,66 @@ def print_walk_forward_detail(windows: list[Any]) -> None:
     print(f"  Negative Sharpe windows: {negative}/{len(windows)}")
 
 
-def load_backtest_ohlcv(settings: dict[str, Any]) -> tuple[pd.DataFrame, str]:
+def load_backtest_ohlcv(
+    settings: dict[str, Any],
+    *,
+    allow_proxy: bool = False,
+    allow_synthetic: bool = False,
+) -> tuple[pd.DataFrame, str]:
+    db_path = Path(str(settings.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3")))
     oanda_settings = settings.get("broker", {}).get("oanda", {})
+    ingestor = AurumDataIngestor(settings)
     if os.getenv(str(oanda_settings.get("api_key_env", "OANDA_API_KEY"))):
         end = datetime.now(UTC)
         start = end - timedelta(days=365)
-        frame = AurumDataIngestor(settings).fetch_ohlcv_range("M15", start, end)
+        try:
+            fetched = ingestor.fetch_ohlcv_range("M15", start, end)
+            if not fetched.empty:
+                ingestor.persist_ohlcv("M15", fetched)
+                frame = _oanda_cache_frame(db_path)
+                if not frame.empty:
+                    return frame.sort_index(), "real OANDA M15 XAU/USD"
+        except Exception as exc:
+            frame = _oanda_cache_frame(db_path)
+            if not frame.empty:
+                return frame.sort_index(), f"cached SQLite OANDA M15 XAU/USD (fetch warning: {exc})"
+            if not allow_proxy and not allow_synthetic:
+                raise RuntimeError(f"Real OANDA XAU_USD backtest data unavailable: {exc}") from exc
+    else:
+        frame = _oanda_cache_frame(db_path)
         if not frame.empty:
-            if "timestamp" in frame.columns:
-                frame = frame.copy()
-                frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-                frame = frame.set_index("timestamp")
-            return frame.sort_index(), "OANDA M15 XAU/USD"
+            return frame.sort_index(), "cached SQLite OANDA M15 XAU/USD"
+        if not allow_proxy and not allow_synthetic:
+            raise RuntimeError("Real OANDA XAU_USD backtest requires OANDA_API_KEY in .env or environment.")
 
+    if allow_proxy:
+        try:
+            return _gold_futures_proxy(settings)
+        except Exception as exc:
+            if not allow_synthetic:
+                raise RuntimeError(f"Gold futures proxy requested but unavailable: {exc}") from exc
+
+    if allow_synthetic:
+        return synthetic_ohlcv(900), "synthetic fallback (plumbing only)"
+
+    raise RuntimeError("Real OANDA XAU_USD backtest data unavailable.")
+
+
+def _oanda_cache_frame(db_path: Path) -> pd.DataFrame:
+    try:
+        frame = load_ohlcv("M15", db_path)
+    except Exception:
+        return pd.DataFrame()
+    if frame.empty:
+        return frame
+    if "source" in frame.columns:
+        frame = frame[frame["source"].astype(str).str.lower() == "oanda"]
+    if "instrument" in frame.columns:
+        frame = frame[frame["instrument"].astype(str).eq("XAU_USD")]
+    return frame.tail(DEFAULT_OANDA_BACKTEST_COUNT).copy()
+
+
+def _gold_futures_proxy(settings: dict[str, Any]) -> tuple[pd.DataFrame, str]:
     try:
         import yfinance as yf
 
@@ -166,25 +263,74 @@ def load_backtest_ohlcv(settings: dict[str, Any]) -> tuple[pd.DataFrame, str]:
         frame["source"] = "yfinance"
         frame["instrument"] = "GC=F"
         return frame.dropna().sort_index().tail(DEFAULT_OANDA_BACKTEST_COUNT), "GC=F futures proxy"
-    except Exception:
-        return synthetic_ohlcv(900), "synthetic fallback"
+    except Exception as exc:
+        raise RuntimeError(f"yfinance GC=F returned no usable rows: {exc}") from exc
 
 
-def load_backtest_macro(settings: dict[str, Any], ohlcv: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+def load_backtest_macro(
+    settings: dict[str, Any],
+    ohlcv: pd.DataFrame,
+    *,
+    allow_placeholder: bool = False,
+) -> tuple[pd.DataFrame, str]:
+    db_path = Path(str(settings.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3")))
     fred_settings = settings.get("data", {}).get("fred", {})
     fred_api_key_env = str(fred_settings.get("api_key_env", "FRED_API_KEY"))
-    placeholder_status = "placeholder (set FRED_API_KEY for real data)"
+    cached = _macro_cache_frame(db_path)
+    if not cached.empty:
+        return cached, "cached SQLite real macro"
     if not os.getenv(fred_api_key_env):
-        return synthetic_macro_for(ohlcv), placeholder_status
+        if allow_placeholder:
+            return synthetic_macro_for(ohlcv), "placeholder (set FRED_API_KEY for real data)"
+        raise RuntimeError("Real macro backtest requires FRED_API_KEY in .env or environment.")
     try:
-        macro = AurumDataIngestor(settings).fetch_macro_data()
-        macro["date"] = pd.to_datetime(macro["date"], utc=True)
-        macro = macro.set_index("date")
-        for column in MACRO_NUMERIC_COLUMNS:
-            macro[column] = pd.to_numeric(macro[column], errors="coerce").astype("float64")
-        return macro.sort_index(), "real (DGS10, CPI, DXY, VIX)"
+        ingestor = AurumDataIngestor(settings)
+        ingestor.persist_macro_data(ingestor.fetch_macro_data())
+        macro = _macro_cache_frame(db_path)
+        if not macro.empty:
+            return macro, "real (DGS10, CPI, DXY, VIX)"
+    except Exception as exc:
+        if allow_placeholder:
+            return synthetic_macro_for(ohlcv), f"placeholder (real macro failed: {exc})"
+        raise RuntimeError(f"Real macro backtest data unavailable: {exc}") from exc
+    raise RuntimeError("Real macro backtest data unavailable.")
+
+
+def _macro_cache_frame(db_path: Path) -> pd.DataFrame:
+    try:
+        return load_macro(db_path)
     except Exception:
-        return synthetic_macro_for(ohlcv), placeholder_status
+        return pd.DataFrame()
+
+
+def load_backtest_cot(
+    settings: dict[str, Any],
+    ohlcv: pd.DataFrame,
+    *,
+    allow_placeholder: bool = False,
+) -> tuple[pd.DataFrame, str]:
+    db_path = Path(str(settings.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3")))
+    cached = _cot_cache_frame(db_path)
+    if not cached.empty:
+        return cached, "cached SQLite real COT"
+    try:
+        ingestor = AurumDataIngestor(settings)
+        ingestor.persist_cot_data(ingestor.fetch_cot_data())
+        cot = _cot_cache_frame(db_path)
+        if not cot.empty:
+            return cot, "real CFTC COT"
+    except Exception as exc:
+        if allow_placeholder:
+            return synthetic_cot_for(ohlcv), f"placeholder (real COT failed: {exc})"
+        raise RuntimeError(f"Real CFTC COT backtest data unavailable: {exc}") from exc
+    raise RuntimeError("Real CFTC COT backtest data unavailable.")
+
+
+def _cot_cache_frame(db_path: Path) -> pd.DataFrame:
+    try:
+        return load_cot(db_path)
+    except Exception:
+        return pd.DataFrame()
 
 
 def print_header(
