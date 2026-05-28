@@ -1,0 +1,129 @@
+{
+  "app": {
+    "name": "AURUM-1",
+    "environment": "development",
+    "log_level": "INFO",
+    "random_seed": 42
+  },
+  "broker": {
+    "paper_trade": true,
+    "paper_initial_equity": 10000.0,
+    "oanda": {
+      "api_key_env": "OANDA_API_KEY",
+      "account_id_env": "OANDA_ACCOUNT_ID",
+      "environment_env": "OANDA_ENV",
+      "default_environment": "practice",
+      "instrument": "XAU_USD",
+      "practice_url": "https://api-fxpractice.oanda.com",
+      "live_url": "https://api-fxtrade.oanda.com"
+    }
+  },
+  "data": {
+    "db_path": "aurum1/data/aurum1.sqlite3",
+    "instrument": "XAUUSD",
+    "yfinance_symbol": "XAUUSD=X",
+    "timeframes": ["M5", "M15", "H1", "H4", "D1"],
+    "http_timeout_seconds": 30,
+    "retry": {
+      "attempts": 3,
+      "base_delay_seconds": 0.5,
+      "max_delay_seconds": 8.0
+    },
+    "fred": {
+      "api_key_env": "FRED_API_KEY",
+      "base_url": "https://api.stlouisfed.org/fred/series/observations",
+      "series": {
+        "dgs10": "DGS10",
+        "cpi": "CPIAUCSL"
+      }
+    },
+    "macro_yfinance": {
+      "dxy_symbol": "DX-Y.NYB",
+      "vix_symbol": "^VIX"
+    },
+    "cot": {
+      "source_url": "https://www.cftc.gov/dea/newcot/f_disagg_txt_2026.zip",
+      "market_filter": "GOLD"
+    },
+    "calendar": {
+      "source_url": "https://www.investing.com/economic-calendar/",
+      "source_name": "investing.com",
+      "blackout_window_minutes": 30,
+      "currencies": ["USD", "XAU"],
+      "high_impact_terms": ["FOMC", "NFP", "NONFARM", "CPI", "GOLD"]
+    },
+    "news": {
+      "api_key_env": "ALPHA_VANTAGE_API_KEY",
+      "base_url": "https://www.alphavantage.co/query",
+      "limit": 50,
+      "topics": "financial_markets,forex",
+      "gold_terms": ["gold", "xau", "dollar", "usd", "forex", "fx"]
+    }
+  },
+  "risk": {
+    "spread_filter_pips": 3.0,
+    "default_spread_pips": 1.5,
+    "risk_per_trade_pct": 0.01,
+    "kelly_min_trades": 20,
+    "kelly_default_fraction": 0.25,
+    "kelly_cap": 0.25,
+    "kelly_max_fraction": 0.25,
+    "max_spread_pips": 3.0,
+    "daily_loss_kill_pct": 0.03,
+    "total_drawdown_kill_pct": 0.08,
+    "drawdown_recovery_threshold_pct": 0.05,
+    "max_portfolio_risk_pct": 3.0,
+    "pip_value_per_lot": 1.0,
+    "pip_size": 0.01,
+    "min_lot_size": 0.01,
+    "max_lot_size": 10.0,
+    "lot_step": 0.01
+  },
+  "signals": {
+    "adx_threshold": 25,
+    "min_pullback_candles": 1,
+    "max_pullback_candles": 4,
+    "armed_timeout_candles": 20,
+    "window_expiry_candles": 6,
+    "atr_sl_multiplier": 2.0,
+    "atr_tp_multiplier": 3.0,
+    "atr_breakout_buffer": 0.3,
+    "require_session_filter": true
+  },
+  "execution": {
+    "fill_timeout_candles": 3,
+    "slippage_std_pips": 0.5,
+    "paper_spread_pips": 1.5
+  },
+  "backtesting": {
+    "train_bars": 6552,
+    "test_bars": 1638,
+    "step_bars": 546,
+    "n_monte_carlo": 1000,
+    "min_trades_for_stats": 10
+  },
+  "monitor": {
+    "dashboard_port": 8501,
+    "refresh_interval_sec": 60,
+    "rolling_window_days": 30,
+    "equity_chart_max_rows": 10000,
+    "health_port": 8080
+  },
+  "orchestrator": {
+    "mode": "rule_regime",
+    "candle_interval_minutes": 15,
+    "candle_buffer_seconds": 5,
+    "macro_refresh_minutes": 60,
+    "sentiment_refresh_minutes": 30,
+    "max_consecutive_errors": 10,
+    "close_on_shutdown": false,
+    "health_port": 8080,
+    "retraining_day": 6,
+    "retraining_hour": 0,
+    "retraining_minute": 0,
+    "retraining_window_minutes": 15,
+    "log_level": "INFO",
+    "log_file": "logs/aurum1.log",
+    "shadow_mode": false
+  }
+}
