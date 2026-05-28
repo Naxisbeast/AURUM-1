@@ -1,0 +1,8 @@
+/opt/aurum1/logs/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

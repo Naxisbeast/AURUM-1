@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from statistics import mean
 from typing import Any
 
+from aurum1.instruments import InstrumentSpec
 from aurum1.signals import TradeInstruction
 
 
@@ -38,6 +39,8 @@ class RiskOrder:
     portfolio_risk_after: float
     recovery_mode: bool = False
     warnings: list[str] = field(default_factory=list)
+    units: float = 0.0
+    notional_ounces: float = 0.0
 
 
 class RiskManager:
@@ -46,6 +49,7 @@ class RiskManager:
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
         self.risk_settings = settings.get("risk", {})
+        self.instrument = InstrumentSpec.from_settings(settings)
 
     def evaluate(
         self,
@@ -80,8 +84,8 @@ class RiskManager:
             recovery_mode = True
             warnings.append("recovery_mode_active")
 
-        lot_size = self._lot_size(instruction, adjusted_risk)
-        risk_amount = self._risk_amount(instruction, lot_size)
+        lot_size, units = self._position_size(instruction, adjusted_risk)
+        risk_amount = self._risk_amount(instruction, units)
         risk_pct = risk_amount / equity * 100.0
         portfolio_risk_after = account.open_risk_pct + risk_pct
         if 2.0 < portfolio_risk_after < self._setting("max_portfolio_risk_pct", 3.0):
@@ -98,6 +102,8 @@ class RiskManager:
             portfolio_risk_after=portfolio_risk_after,
             recovery_mode=recovery_mode,
             warnings=_dedupe(warnings),
+            units=units,
+            notional_ounces=units * self.instrument.ounces_per_unit,
         )
 
     def _kelly_fraction(self, trade_history: list[dict[str, Any]]) -> float:
@@ -119,23 +125,24 @@ class RiskManager:
             )
         )
 
-    def _lot_size(self, instruction: TradeInstruction, adjusted_risk: float) -> float:
-        sl_pips = self._sl_pips(instruction)
-        pip_value = self._setting("pip_value_per_lot", 1.0)
-        if sl_pips <= 0.0 or pip_value <= 0.0:
-            raw_lot_size = self._setting("min_lot_size", 0.01)
+    def _position_size(self, instruction: TradeInstruction, adjusted_risk: float) -> tuple[float, float]:
+        sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))
+        if sl_distance <= 0.0 or self.instrument.ounces_per_unit <= 0.0:
+            raw_units = self.instrument.min_units
         else:
-            raw_lot_size = adjusted_risk / (sl_pips * pip_value)
-        clamped = max(self._setting("min_lot_size", 0.01), min(self._setting("max_lot_size", 10.0), raw_lot_size))
-        rounded = self._round_to_step(clamped, self._setting("lot_step", 0.01))
-        return float(max(self._setting("min_lot_size", 0.01), min(self._setting("max_lot_size", 10.0), rounded)))
+            raw_units = float(adjusted_risk) / (sl_distance * self.instrument.ounces_per_unit)
+        raw_lots = self.instrument.units_to_lots(raw_units)
+        lots = self.instrument.round_lots(raw_lots)
+        units = self.instrument.lots_to_units(lots)
+        return float(lots), float(units)
 
-    def _risk_amount(self, instruction: TradeInstruction, lot_size: float) -> float:
-        return float(self._sl_pips(instruction) * self._setting("pip_value_per_lot", 1.0) * lot_size)
+    def _risk_amount(self, instruction: TradeInstruction, units: float) -> float:
+        sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))
+        return float(sl_distance * units * self.instrument.ounces_per_unit)
 
     def _sl_pips(self, instruction: TradeInstruction) -> float:
         sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))
-        return sl_distance / self._setting("pip_size", 0.01)
+        return sl_distance / self.instrument.pip_size
 
     def _round_to_step(self, value: float, step: float) -> float:
         if step <= 0.0:

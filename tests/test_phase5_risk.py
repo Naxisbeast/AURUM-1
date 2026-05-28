@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from aurum1.instruments import InstrumentSpec
 from aurum1.risk import AccountState, RiskManager, RiskOrder
 from aurum1.signals import TradeInstruction
 
@@ -84,6 +85,22 @@ def test_lot_size_calculated_correctly() -> None:
 
     assert order.lot_size == pytest.approx(expected, abs=0.001)
     assert order.approved is True
+
+
+def test_xauusd_one_unit_pnl_matches_oanda_convention() -> None:
+    spec = InstrumentSpec.from_settings({})
+
+    assert spec.pnl("BUY", 2300.0, 2301.0, 1.0) == pytest.approx(1.0)
+    assert spec.pnl("SELL", 2300.0, 2299.0, 1.0) == pytest.approx(1.0)
+    assert spec.pip_value_per_lot == pytest.approx(1.0)
+
+
+def test_xauusd_risk_sizing_converts_to_oanda_units() -> None:
+    order = make_rm().evaluate(make_instruction(entry_price=2330.0, stop_loss=2320.0), make_account(), [])
+
+    assert order.units == pytest.approx(3.0)
+    assert order.lot_size == pytest.approx(0.03)
+    assert order.risk_amount == pytest.approx(30.0)
 
 
 def test_kelly_uses_default_when_insufficient_history() -> None:

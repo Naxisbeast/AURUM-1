@@ -22,7 +22,9 @@ def main() -> int:
     if bool(settings.get("broker", {}).get("paper_trade", True)):
         PaperBroker(settings)
 
-    port = str(settings.get("monitor", {}).get("dashboard_port", 8501))
+    monitor_settings = settings.get("monitor", {})
+    port = str(monitor_settings.get("dashboard_port", 8501))
+    host = str(monitor_settings.get("dashboard_host", "127.0.0.1"))
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     command = [
@@ -33,6 +35,8 @@ def main() -> int:
         str(ROOT / "monitor" / "dashboard.py"),
         "--server.port",
         port,
+        "--server.address",
+        host,
         "--server.headless",
         "true",
     ]

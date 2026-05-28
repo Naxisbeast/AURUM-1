@@ -51,7 +51,10 @@ class WalkForwardValidator:
         params = self.settings.get("backtesting", {})
         train_bars = int(params.get("train_bars", 6552))
         test_bars = int(params.get("test_bars", 1638))
-        step_bars = int(params.get("step_bars", 546))
+        step_bars = int(params.get("step_bars", test_bars))
+        allow_overlap = bool(params.get("allow_overlap", False))
+        if step_bars < test_bars and not allow_overlap:
+            raise ValueError("Overlapping walk-forward windows require backtesting.allow_overlap=true")
         windows: list[BacktestResult] = []
         start = 0
         while start + train_bars + test_bars <= len(ohlcv):

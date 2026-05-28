@@ -24,6 +24,9 @@ __pycache__/
 .pytestdeps/
 .pytestwheels/
 .testdeps/
+.run_deps/
+.pytest_run_deps/
+.pytest_tmp/
 
 # Runtime logs and generated reports
 logs/

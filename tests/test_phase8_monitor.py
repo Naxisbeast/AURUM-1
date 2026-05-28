@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from aurum1.data.ingestion import initialize_database
+from aurum1.data.ingestion import load_settings
 from monitor.metrics import (
     compute_drawdown_curve,
     compute_rolling_profit_factor,
@@ -118,3 +119,9 @@ def test_get_system_status_returns_required_keys() -> None:
         "total_drawdown_kill_triggered",
     }
     assert required.issubset(status)
+
+
+def test_dashboard_binds_localhost_by_default() -> None:
+    settings = load_settings(Path(__file__).resolve().parents[1] / "aurum1" / "config" / "settings.yaml")
+
+    assert settings["monitor"]["dashboard_host"] == "127.0.0.1"

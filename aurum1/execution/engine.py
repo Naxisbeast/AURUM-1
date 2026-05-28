@@ -21,7 +21,14 @@ class ExecutionEngine:
 
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
-        self.db_path = Path(str(settings.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3")))
+        self.db_path = Path(
+            str(
+                settings.get("execution", {}).get(
+                    "db_path",
+                    settings.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3"),
+                )
+            )
+        )
         initialize_database(self.db_path)
         if bool(settings.get("broker", {}).get("paper_trade", True)):
             self.broker: BrokerBase = PaperBroker(settings)

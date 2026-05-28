@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import sys
 import tempfile
@@ -60,6 +61,7 @@ def main() -> int:
     args = parse_args()
     load_dotenv(ROOT / ".env")
     settings = load_settings(args.settings)
+    settings = configure_validation_market_cache(settings)
 
     with tempfile.TemporaryDirectory() as tempdir:
         settings.setdefault("models", {})
@@ -161,6 +163,17 @@ def load_dotenv(path: Path) -> None:
         value = value.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = value
+
+
+def configure_validation_market_cache(settings: dict[str, Any]) -> dict[str, Any]:
+    isolated = copy.deepcopy(settings)
+    isolated.setdefault("backtesting", {})
+    isolated.setdefault("data", {})
+    runtime_db = str(isolated["data"].get("db_path", "aurum1/data/aurum1.sqlite3"))
+    market_db = str(isolated["backtesting"].get("market_data_db_path", "aurum1/data/backtest_market_cache.sqlite3"))
+    isolated["backtesting"]["runtime_db_path"] = runtime_db
+    isolated["data"]["db_path"] = market_db
+    return isolated
 
 
 def build_validation_features(

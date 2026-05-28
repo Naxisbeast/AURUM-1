@@ -16,6 +16,7 @@ import pandas as pd
 
 from aurum1.execution import ExecutionEngine, PaperBroker
 from aurum1.features.engineer import FeatureEngineer, WARMUP_BARS
+from aurum1.instruments import InstrumentSpec
 from aurum1.models.ensemble import SignalResult
 from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
 from aurum1.risk import RiskManager
@@ -101,6 +102,14 @@ class BacktestEngine:
         for bar_index, (timestamp, _) in enumerate(ohlcv.iterrows()):
             candle = None
             signal = None
+            price_candle = _basic_candle_from_ohlcv(timestamp, ohlcv.loc[timestamp])
+            execution.update_paper_prices(price_candle)
+            new_closed = execution.broker._trade_history[trade_history_cursor:]
+            for trade in new_closed:
+                meta = open_meta.pop(str(trade.get("position_id")), {})
+                closed_trades.append(_augment_trade(trade, meta, bar_index, run_settings))
+            trade_history_cursor = len(execution.broker._trade_history)
+
             if timestamp in feature_table.index:
                 feature_frame = feature_table.loc[:timestamp]
                 feature_row = feature_frame.iloc[-1]
@@ -129,14 +138,6 @@ class BacktestEngine:
                             "risk_amount": risk_order.risk_amount,
                             "signal_score": instruction.signal_score,
                         }
-
-            price_candle = candle or _basic_candle_from_ohlcv(timestamp, ohlcv.loc[timestamp])
-            execution.update_paper_prices(price_candle)
-            new_closed = execution.broker._trade_history[trade_history_cursor:]
-            for trade in new_closed:
-                meta = open_meta.pop(str(trade.get("position_id")), {})
-                closed_trades.append(_augment_trade(trade, meta, bar_index, run_settings))
-            trade_history_cursor = len(execution.broker._trade_history)
 
             account_state = execution.broker.get_account_state()
             equity_curve.append(float(account_state.equity))
@@ -258,8 +259,13 @@ class BacktestEngine:
         run_settings["broker"]["paper_trade"] = True
         run_settings["broker"]["paper_initial_equity"] = initial_equity
         run_settings.setdefault("data", {})
-        if "db_path" not in run_settings["data"]:
-            run_settings["data"]["db_path"] = str(Path(tempfile.mkdtemp()) / "backtest.sqlite3")
+        run_settings.setdefault("execution", {})
+        run_settings.setdefault("backtesting", {})
+        execution_db = run_settings["backtesting"].get("execution_db_path")
+        if execution_db is None:
+            execution_db = str(Path(tempfile.mkdtemp()) / "backtest_execution.sqlite3")
+            run_settings["backtesting"]["execution_db_path"] = execution_db
+        run_settings["execution"]["db_path"] = str(execution_db)
         return run_settings
 
 
@@ -286,8 +292,8 @@ def build_backtest_result(
     drawdown_curve = _drawdown_curve(adjusted_curve)
     total_return_pct = (final_equity / initial_equity - 1.0) if initial_equity else 0.0
     cagr = _cagr(initial_equity, final_equity, start_date, end_date)
-    sharpe = _sharpe(adjusted_curve)
-    sortino = _sortino(adjusted_curve)
+    sharpe = _sharpe(adjusted_curve, start_date, end_date)
+    sortino = _sortino(adjusted_curve, start_date, end_date)
     max_drawdown = abs(min(drawdown_curve)) if drawdown_curve else 0.0
     calmar = _cap_metric(cagr / max_drawdown if max_drawdown else math.inf)
     pnl_values = [float(trade.get("pnl_after_fees", trade.get("pnl", 0.0))) for trade in net_trades]
@@ -398,10 +404,11 @@ def _augment_trade(trade: dict[str, Any], meta: dict[str, Any], bar_index: int, 
     result["close_bar"] = bar_index
     result["duration_bars"] = max(0, bar_index - int(result.get("open_bar", bar_index)))
     lot_size = float(result.get("lot_size", 0.0))
+    instrument = InstrumentSpec.from_settings(settings)
     fee = (
         2.0
         * float(settings.get("execution", {}).get("paper_spread_pips", 1.5))
-        * float(settings.get("risk", {}).get("pip_value_per_lot", 1.0))
+        * instrument.pip_value_per_lot
         * lot_size
     )
     result["fee"] = fee
@@ -436,16 +443,25 @@ def _drawdown_curve(equity_curve: list[float]) -> list[float]:
     return drawdown.fillna(0.0).tolist()
 
 
-def _sharpe(equity_curve: list[float]) -> float:
-    returns = pd.Series(equity_curve, dtype=float).pct_change().dropna()
+def _daily_returns(equity_curve: list[float], start_date: datetime, end_date: datetime) -> pd.Series:
+    if len(equity_curve) < 2:
+        return pd.Series(dtype=float)
+    index = pd.date_range(start_date, end_date, periods=len(equity_curve), tz="UTC")
+    equity = pd.Series(equity_curve, index=index, dtype=float)
+    daily_equity = equity.resample("1D").last().dropna()
+    return daily_equity.pct_change().dropna()
+
+
+def _sharpe(equity_curve: list[float], start_date: datetime, end_date: datetime) -> float:
+    returns = _daily_returns(equity_curve, start_date, end_date)
     std = float(returns.std())
     if returns.empty or std == 0.0 or math.isnan(std):
         return 0.0
     return float((returns.mean() / std) * math.sqrt(252))
 
 
-def _sortino(equity_curve: list[float]) -> float:
-    returns = pd.Series(equity_curve, dtype=float).pct_change().dropna()
+def _sortino(equity_curve: list[float], start_date: datetime, end_date: datetime) -> float:
+    returns = _daily_returns(equity_curve, start_date, end_date)
     downside = returns[returns < 0.0]
     if downside.empty:
         return 10.0

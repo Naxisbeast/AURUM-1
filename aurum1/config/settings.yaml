@@ -62,6 +62,21 @@
       "gold_terms": ["gold", "xau", "dollar", "usd", "forex", "fx"]
     }
   },
+  "instruments": {
+    "XAU_USD": {
+      "oanda_instrument": "XAU_USD",
+      "account_currency": "USD",
+      "pip_size": 0.01,
+      "ounces_per_unit": 1.0,
+      "units_per_lot": 100.0,
+      "min_units": 1.0,
+      "max_units": 1000.0,
+      "unit_precision": 0,
+      "min_lot_size": 0.01,
+      "max_lot_size": 10.0,
+      "lot_step": 0.01
+    }
+  },
   "risk": {
     "spread_filter_pips": 3.0,
     "default_spread_pips": 1.5,
@@ -100,11 +115,14 @@
   "backtesting": {
     "train_bars": 6552,
     "test_bars": 1638,
-    "step_bars": 546,
+    "step_bars": 1638,
+    "allow_overlap": false,
+    "market_data_db_path": "aurum1/data/backtest_market_cache.sqlite3",
     "n_monte_carlo": 1000,
     "min_trades_for_stats": 10
   },
   "monitor": {
+    "dashboard_host": "127.0.0.1",
     "dashboard_port": 8501,
     "refresh_interval_sec": 60,
     "rolling_window_days": 30,

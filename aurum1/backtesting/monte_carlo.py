@@ -44,7 +44,9 @@ def run_monte_carlo(
         final_equities.append(float(equity[-1]))
         drawdowns = _drawdown_curve(equity)
         max_drawdowns.append(abs(min(drawdowns)) if drawdowns else 0.0)
-        sharpes.append(_sharpe(equity))
+        start = pd.Timestamp("2026-01-01", tz="UTC").to_pydatetime()
+        end = start + pd.Timedelta(days=max(1, len(equity) - 1)).to_pytimedelta()
+        sharpes.append(_sharpe(equity, start, end))
         if min(equity) < initial_equity * 0.5:
             ruins += 1
     return MonteCarloResult(

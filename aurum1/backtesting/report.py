@@ -20,6 +20,7 @@ def print_backtest_report(result: BacktestResult) -> None:
     print("╠══════════════════════════════════════════════╣")
     print(f"║ Return:     {result.total_return_pct * 100:>8.2f}%                 ║")
     print(f"║ Sharpe:     {result.sharpe_ratio:>8.2f}                  ║")
+    print("║ SharpeFreq: daily returns                  ║")
     print(f"║ ProfitFact: {result.profit_factor:>8.2f}                  ║")
     print(f"║ Max DD:     {result.max_drawdown_pct * 100:>8.2f}%                 ║")
     print(f"║ Win Rate:   {result.win_rate * 100:>8.2f}%                 ║")

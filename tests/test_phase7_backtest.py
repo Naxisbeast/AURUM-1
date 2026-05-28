@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 import tempfile
+from contextlib import closing
 from datetime import UTC
 from pathlib import Path
 
@@ -18,6 +20,10 @@ from aurum1.backtesting import (
 )
 from aurum1.backtesting.engine import build_backtest_result
 from aurum1.backtesting.report import plot_equity_curve
+from aurum1.data.ingestion import initialize_database
+from aurum1.execution import PaperBroker
+from aurum1.risk import AccountState, RiskOrder
+from aurum1.signals import CandleRow, TradeInstruction
 from aurum1.signals import MachineMode
 
 
@@ -126,7 +132,7 @@ def settings(overrides: dict | None = None) -> dict:
             "require_session_filter": False,
         },
         "execution": {"fill_timeout_candles": 3, "slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
-        "backtesting": {"train_bars": 300, "test_bars": 100, "step_bars": 50, "n_monte_carlo": 1000},
+        "backtesting": {"train_bars": 300, "test_bars": 100, "step_bars": 100, "allow_overlap": False, "n_monte_carlo": 1000},
         "models": {"direction": {"max_epochs": 1, "sequence_length": 10, "batch_size": 64, "patience": 1}},
     }
     if overrides:
@@ -196,6 +202,32 @@ def test_backtest_sharpe_formula() -> None:
     expected = expected_returns.mean() / expected_returns.std() * math.sqrt(252)
 
     assert result.sharpe_ratio == 0.0 if math.isnan(expected) else abs(result.sharpe_ratio - expected) < 0.05
+
+
+def test_daily_sharpe_uses_daily_returns() -> None:
+    intraday_curve = [10000.0, 10050.0, 10100.0, 10080.0, 10120.0, 10160.0]
+    result = build_backtest_result(
+        equity_curve=intraday_curve,
+        trades=[],
+        start_date=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        end_date=pd.Timestamp("2026-01-03T23:45:00Z").to_pydatetime(),
+        instrument="XAU_USD",
+        mode="rule_regime",
+        initial_equity=10000.0,
+        total_bars=len(intraday_curve),
+        total_signals=0,
+        signals_approved=0,
+        signals_rejected=0,
+        rejection_reasons={},
+    )
+    daily_equity = pd.Series(
+        intraday_curve,
+        index=pd.date_range("2026-01-01T00:00:00Z", "2026-01-03T23:45:00Z", periods=len(intraday_curve)),
+    ).resample("1D").last()
+    expected_returns = daily_equity.pct_change().dropna()
+    expected = expected_returns.mean() / expected_returns.std() * math.sqrt(252)
+
+    assert result.sharpe_ratio == pytest.approx(expected, abs=0.001)
 
 
 def test_backtest_max_drawdown_formula() -> None:
@@ -286,6 +318,86 @@ def test_walk_forward_produces_multiple_windows() -> None:
         "worst_window_max_drawdown",
         "positive_window_rate",
     }
+
+
+def test_walk_forward_defaults_non_overlapping() -> None:
+    config = settings()
+
+    assert config["backtesting"]["step_bars"] == config["backtesting"]["test_bars"]
+    assert config["backtesting"]["allow_overlap"] is False
+
+
+def test_backtest_uses_isolated_database_by_default() -> None:
+    with tempfile.TemporaryDirectory() as tempdir:
+        runtime_db = Path(tempdir) / "runtime.sqlite3"
+        initialize_database(runtime_db)
+        config = settings({"data": {"db_path": str(runtime_db)}})
+        ohlcv = synthetic_ohlcv(500)
+        before = _count_trades(runtime_db)
+
+        BacktestEngine(config).run(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv))
+
+        assert _count_trades(runtime_db) == before
+
+
+def test_backtest_no_same_candle_exit_after_entry() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(settings()).run(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv))
+
+    assert all(int(trade.get("duration_bars", 0)) >= 1 for trade in result.trades)
+
+
+def test_same_candle_sl_tp_assumes_stop_first() -> None:
+    broker = PaperBroker(settings())
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="BUY",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=105.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_UP",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+    order = RiskOrder(
+        instruction=instruction,
+        lot_size=0.01,
+        risk_amount=5.0,
+        risk_pct=0.05,
+        kelly_fraction=0.25,
+        approved=True,
+        rejection_reason=None,
+        portfolio_risk_after=0.05,
+        units=1.0,
+        notional_ounces=1.0,
+    )
+    broker.submit_order(order)
+    broker.update_prices(
+        CandleRow(
+            timestamp=pd.Timestamp("2026-01-01T00:15:00Z").to_pydatetime(),
+            open=100.0,
+            high=106.0,
+            low=94.0,
+            close=100.0,
+            volume=1.0,
+            atr_14=2.0,
+            adx_14=30.0,
+            ema_9=101.0,
+            ema_20=100.0,
+            session_london=1,
+            session_ny=0,
+            session_overlap=0,
+        )
+    )
+
+    assert broker._trade_history[-1]["reason"] == "stop_loss"
+
+
+def _count_trades(db_path: Path) -> int:
+    with closing(sqlite3.connect(db_path)) as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM trades_log").fetchone()[0])
 
 
 def test_monte_carlo_produces_distribution() -> None:
