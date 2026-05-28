@@ -371,8 +371,8 @@ def _merge_asof_on_index(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFram
 
 def _utc_index(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     if index.tz is None:
-        return index.tz_localize("UTC")
-    return index.tz_convert("UTC")
+        return index.tz_localize("UTC").astype("datetime64[ns, UTC]")
+    return index.tz_convert("UTC").astype("datetime64[ns, UTC]")
 
 
 __all__ = ["FeatureEngineer", "assert_no_lookahead"]

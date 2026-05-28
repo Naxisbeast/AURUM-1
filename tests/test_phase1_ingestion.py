@@ -246,6 +246,40 @@ class Phase1IngestionTests(unittest.TestCase):
         self.assertFalse(merged.iloc[13:][["real_yield", "dxy", "vix"]].isna().any().any())
         self.assertEqual(merged.shape[0], ohlcv.shape[0])
 
+    def test_merge_macro_handles_different_datetime_precisions(self) -> None:
+        ohlcv_index = pd.date_range("2026-05-27T00:00:00Z", periods=20, freq="15min").astype(
+            "datetime64[s, UTC]"
+        )
+        macro_index = pd.to_datetime(["2026-05-26", "2026-05-27"], utc=True).astype("datetime64[us, UTC]")
+        ohlcv = pd.DataFrame(
+            {
+                "open": [2330.0] * 20,
+                "high": [2335.0] * 20,
+                "low": [2328.0] * 20,
+                "close": [2332.0] * 20,
+                "volume": [100.0] * 20,
+            },
+            index=ohlcv_index,
+        )
+        macro = pd.DataFrame(
+            {
+                "dgs10": [4.2, 4.3],
+                "cpi": [315.0, 316.0],
+                "cpi_yoy": [3.1, 3.2],
+                "real_yield": [1.1, 1.1],
+                "dxy": [104.0, 104.5],
+                "dxy_daily_return": [0.001, 0.004],
+                "vix": [16.0, 17.0],
+                "vix_1d_change": [0.2, 1.0],
+            },
+            index=macro_index,
+        )
+
+        merged = merge_macro_onto_ohlcv(ohlcv, macro)
+
+        self.assertEqual(str(merged.index.dtype), "datetime64[ns, UTC]")
+        self.assertFalse(merged.iloc[13:][["real_yield", "dxy", "vix"]].isna().any().any())
+
     def test_cot_parser_extracts_gold_net_positioning(self) -> None:
         raw_csv = """Market_and_Exchange_Names,Report_Date_as_YYYY-MM-DD,Open_Interest_All,M_Money_Positions_Long_All,M_Money_Positions_Short_All
 GOLD - COMMODITY EXCHANGE INC.,2026-05-19,200000,120000,70000

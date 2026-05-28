@@ -308,7 +308,7 @@ def merge_macro_onto_ohlcv(ohlcv: pd.DataFrame, macro: pd.DataFrame) -> pd.DataF
             merged_empty[column] = pd.Series(dtype="float64")
         return merged_empty
 
-    original_index = pd.DatetimeIndex(ohlcv.index).tz_convert(UTC)
+    original_index = pd.DatetimeIndex(ohlcv.index).tz_convert(UTC).astype("datetime64[ns, UTC]")
     ohlcv_work = ohlcv.copy()
     ohlcv_work.index = original_index
     ohlcv_work["_macro_join_date"] = ohlcv_work.index.normalize()
@@ -319,6 +319,7 @@ def merge_macro_onto_ohlcv(ohlcv: pd.DataFrame, macro: pd.DataFrame) -> pd.DataF
         macro_work.index = macro_work.index.tz_localize(UTC)
     else:
         macro_work.index = macro_work.index.tz_convert(UTC)
+    macro_work.index = pd.DatetimeIndex(macro_work.index).astype("datetime64[ns, UTC]")
     macro_work = macro_work.sort_index().reset_index(names="_macro_join_date")
 
     merged = pd.merge_asof(
