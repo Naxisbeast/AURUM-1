@@ -1,0 +1,50 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local dependency/cache folders
+.deps/
+.pytestdeps/
+.pytestwheels/
+.testdeps/
+
+# Runtime logs and generated reports
+logs/
+*.log
+reports/
+
+# Local data stores and caches
+aurum1/data/aurum1.sqlite3
+aurum1/data/*.db
+*.sqlite3
+*.db
+
+# Deployment bundles and generated artifacts
+aurum1_deploy.zip
+*.zip
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Frontend/dependency folders if added later
+node_modules/

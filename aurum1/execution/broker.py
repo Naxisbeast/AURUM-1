@@ -1,0 +1,440 @@
+"""Broker implementations for AURUM-1 Phase 6 execution."""
+
+from __future__ import annotations
+
+import os
+import random
+from abc import ABC, abstractmethod
+from collections import deque
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from aurum1.risk import AccountState, RiskOrder
+from aurum1.signals import CandleRow
+
+
+@dataclass
+class OrderResult:
+    success: bool
+    order_id: str | None
+    fill_price: float | None
+    fill_time: datetime | None
+    lot_size: float
+    direction: str
+    stop_loss: float
+    take_profit: float
+    rejection_reason: str | None
+    broker: str
+    raw_response: dict | None
+
+
+@dataclass
+class PositionRecord:
+    position_id: str
+    instrument: str
+    direction: str
+    open_price: float
+    current_price: float
+    lot_size: float
+    stop_loss: float
+    take_profit: float
+    open_time: datetime
+    unrealised_pnl: float
+    broker: str
+
+
+class BrokerBase(ABC):
+    @abstractmethod
+    def submit_order(self, order: RiskOrder) -> OrderResult:
+        raise NotImplementedError
+
+    @abstractmethod
+    def close_position(self, position_id: str, reason: str) -> OrderResult:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_account_state(self) -> AccountState:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_open_positions(self) -> list[PositionRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_current_spread_pips(self, instrument: str) -> float:
+        raise NotImplementedError
+
+
+class PaperBroker(BrokerBase):
+    """In-memory broker simulation with simple slippage and SL/TP handling."""
+
+    def __init__(self, settings: dict[str, Any]) -> None:
+        self.settings = settings
+        self.risk_settings = settings.get("risk", {})
+        self.execution_settings = settings.get("execution", {})
+        self.broker_settings = settings.get("broker", {})
+        self.instrument = str(self.broker_settings.get("oanda", {}).get("instrument", "XAU_USD"))
+        initial_equity = float(self.broker_settings.get("paper_initial_equity", 10000.0))
+        self._equity = initial_equity
+        self._balance = initial_equity
+        self._positions: dict[str, PositionRecord] = {}
+        self._trade_history: list[dict[str, Any]] = []
+        self._daily_pnl = 0.0
+        self._peak_equity_30d = initial_equity
+        self._candle_prices: deque[float] = deque(maxlen=500)
+        seed = int(settings.get("general", {}).get("random_seed", settings.get("app", {}).get("random_seed", 42)))
+        self._rng = random.Random(seed)
+
+    def submit_order(self, order: RiskOrder) -> OrderResult:
+        if not order.approved:
+            return _rejected_order_result(order, order.rejection_reason or "risk_order_rejected", "paper")
+
+        spread = self.get_current_spread_pips(self.instrument)
+        if spread > float(self.risk_settings.get("max_spread_pips", 3.0)):
+            return _rejected_order_result(order, "spread_too_wide_at_execution", "paper")
+
+        instruction = order.instruction
+        slippage_std = float(self.execution_settings.get("slippage_std_pips", 0.5)) * float(
+            self.risk_settings.get("pip_size", 0.01)
+        )
+        slippage = abs(self._rng.gauss(0.0, slippage_std))
+        fill_price = instruction.entry_price + slippage if instruction.direction == "BUY" else instruction.entry_price - slippage
+        now = datetime.now(UTC)
+        position_id = f"paper_{uuid4().hex[:8]}"
+        self._positions[position_id] = PositionRecord(
+            position_id=position_id,
+            instrument=self.instrument,
+            direction=instruction.direction,
+            open_price=float(fill_price),
+            current_price=float(fill_price),
+            lot_size=float(order.lot_size),
+            stop_loss=float(instruction.stop_loss),
+            take_profit=float(instruction.take_profit),
+            open_time=now,
+            unrealised_pnl=0.0,
+            broker="paper",
+        )
+        return OrderResult(
+            success=True,
+            order_id=position_id,
+            fill_price=float(fill_price),
+            fill_time=now,
+            lot_size=float(order.lot_size),
+            direction=instruction.direction,
+            stop_loss=float(instruction.stop_loss),
+            take_profit=float(instruction.take_profit),
+            rejection_reason=None,
+            broker="paper",
+            raw_response={"position_id": position_id, "simulated": True},
+        )
+
+    def close_position(self, position_id: str, reason: str) -> OrderResult:
+        position = self._positions.get(position_id)
+        if position is None:
+            return OrderResult(
+                success=False,
+                order_id=position_id,
+                fill_price=None,
+                fill_time=None,
+                lot_size=0.0,
+                direction="UNKNOWN",
+                stop_loss=0.0,
+                take_profit=0.0,
+                rejection_reason="position_not_found",
+                broker="paper",
+                raw_response={"reason": reason},
+            )
+        return self._close_position_at_price(position_id, position.current_price, reason)
+
+    def update_prices(self, candle: CandleRow) -> None:
+        self._candle_prices.append(float(candle.close))
+        close_queue: list[tuple[str, float, str]] = []
+        for position_id, position in list(self._positions.items()):
+            if position.direction == "BUY":
+                if candle.high >= position.take_profit:
+                    close_queue.append((position_id, position.take_profit, "take_profit"))
+                    continue
+                if candle.low <= position.stop_loss:
+                    close_queue.append((position_id, position.stop_loss, "stop_loss"))
+                    continue
+            else:
+                if candle.low <= position.take_profit:
+                    close_queue.append((position_id, position.take_profit, "take_profit"))
+                    continue
+                if candle.high >= position.stop_loss:
+                    close_queue.append((position_id, position.stop_loss, "stop_loss"))
+                    continue
+            position.current_price = float(candle.close)
+            position.unrealised_pnl = self._pnl(position, float(candle.close))
+
+        for position_id, close_price, reason in close_queue:
+            self._close_position_at_price(position_id, close_price, reason)
+
+    def get_account_state(self) -> AccountState:
+        return AccountState(
+            equity=float(self._equity),
+            balance=float(self._balance),
+            open_trade_count=len(self._positions),
+            daily_pnl=float(self._daily_pnl),
+            peak_equity_30d=float(self._peak_equity_30d),
+            current_spread_pips=self.get_current_spread_pips(self.instrument),
+            open_risk_pct=0.0,
+        )
+
+    def get_open_positions(self) -> list[PositionRecord]:
+        return list(self._positions.values())
+
+    def get_current_spread_pips(self, instrument: str) -> float:
+        return float(self.execution_settings.get("paper_spread_pips", 1.5))
+
+    def _close_position_at_price(self, position_id: str, close_price: float, reason: str) -> OrderResult:
+        position = self._positions.pop(position_id)
+        pnl = self._pnl(position, float(close_price))
+        self._balance += pnl
+        self._equity += pnl
+        self._daily_pnl += pnl
+        self._peak_equity_30d = max(self._peak_equity_30d, self._equity)
+        close_time = datetime.now(UTC)
+        self._trade_history.append(
+            {
+                "position_id": position_id,
+                "pnl": pnl,
+                "direction": position.direction,
+                "entry": position.open_price,
+                "exit": float(close_price),
+                "lot_size": position.lot_size,
+                "open_time": position.open_time.isoformat(),
+                "reason": reason,
+                "closed_at": close_time.isoformat(),
+            }
+        )
+        return OrderResult(
+            success=True,
+            order_id=position_id,
+            fill_price=float(close_price),
+            fill_time=close_time,
+            lot_size=position.lot_size,
+            direction=position.direction,
+            stop_loss=position.stop_loss,
+            take_profit=position.take_profit,
+            rejection_reason=None,
+            broker="paper",
+            raw_response={"reason": reason, "pnl": pnl, "position_id": position_id},
+        )
+
+    def _pnl(self, position: PositionRecord, close_price: float) -> float:
+        pip_size = float(self.risk_settings.get("pip_size", 0.01))
+        if position.direction == "BUY":
+            return (close_price - position.open_price) * position.lot_size / pip_size
+        return (position.open_price - close_price) * position.lot_size / pip_size
+
+
+class OandaBroker(BrokerBase):
+    """OANDA v20 REST broker adapter using oandapyV20 when available."""
+
+    def __init__(self, settings: dict[str, Any]) -> None:
+        self.settings = settings
+        self.risk_settings = settings.get("risk", {})
+        self.execution_settings = settings.get("execution", {})
+        self.oanda_settings = settings.get("broker", {}).get("oanda", {})
+        self.instrument = str(self.oanda_settings.get("instrument", "XAU_USD"))
+        self.account_id = os.getenv(str(self.oanda_settings.get("account_id_env", "OANDA_ACCOUNT_ID")), "")
+        self.environment = os.getenv(
+            str(self.oanda_settings.get("environment_env", "OANDA_ENV")),
+            str(self.oanda_settings.get("default_environment", "practice")),
+        )
+        self._client: Any | None = None
+
+    def submit_order(self, order: RiskOrder) -> OrderResult:
+        if not order.approved:
+            return _rejected_order_result(order, order.rejection_reason or "risk_order_rejected", "oanda")
+
+        spread = self.get_current_spread_pips(self.instrument)
+        if spread > float(self.risk_settings.get("max_spread_pips", 3.0)):
+            return _rejected_order_result(order, "spread_too_wide_at_execution", "oanda")
+
+        data = {"order": self._order_payload(order)}
+        response = self._submit_limit_order(data)
+        fill = response.get("orderFillTransaction") or response.get("orderCreateTransaction", {})
+        if "orderFillTransaction" not in response:
+            return OrderResult(
+                success=False,
+                order_id=str(fill.get("id")) if fill.get("id") is not None else None,
+                fill_price=None,
+                fill_time=None,
+                lot_size=float(order.lot_size),
+                direction=order.instruction.direction,
+                stop_loss=float(order.instruction.stop_loss),
+                take_profit=float(order.instruction.take_profit),
+                rejection_reason="fill_timeout",
+                broker="oanda",
+                raw_response=response,
+            )
+
+        fill_time = _parse_datetime(fill.get("time"))
+        return OrderResult(
+            success=True,
+            order_id=str(fill.get("id")) if fill.get("id") is not None else None,
+            fill_price=float(fill.get("price", order.instruction.entry_price)),
+            fill_time=fill_time,
+            lot_size=float(order.lot_size),
+            direction=order.instruction.direction,
+            stop_loss=float(order.instruction.stop_loss),
+            take_profit=float(order.instruction.take_profit),
+            rejection_reason=None,
+            broker="oanda",
+            raw_response=response,
+        )
+
+    def close_position(self, position_id: str, reason: str) -> OrderResult:
+        response = self._close_oanda_position(position_id)
+        close_txn = response.get("longOrderFillTransaction") or response.get("shortOrderFillTransaction") or {}
+        return OrderResult(
+            success=True,
+            order_id=str(close_txn.get("id", position_id)),
+            fill_price=float(close_txn.get("price", 0.0)) if close_txn.get("price") is not None else None,
+            fill_time=_parse_datetime(close_txn.get("time")),
+            lot_size=abs(float(close_txn.get("units", 0.0))) if close_txn.get("units") is not None else 0.0,
+            direction="CLOSE",
+            stop_loss=0.0,
+            take_profit=0.0,
+            rejection_reason=None,
+            broker="oanda",
+            raw_response={**response, "reason": reason},
+        )
+
+    def get_account_state(self) -> AccountState:
+        response = self._account_summary()
+        account = response.get("account", response)
+        equity = float(account.get("NAV", account.get("balance", 0.0)))
+        balance = float(account.get("balance", equity))
+        return AccountState(
+            equity=equity,
+            balance=balance,
+            open_trade_count=int(account.get("openTradeCount", 0)),
+            daily_pnl=0.0,
+            peak_equity_30d=equity,
+            current_spread_pips=self.get_current_spread_pips(self.instrument),
+            open_risk_pct=0.0,
+        )
+
+    def get_open_positions(self) -> list[PositionRecord]:
+        response = self._open_positions()
+        positions: list[PositionRecord] = []
+        for item in response.get("positions", []):
+            instrument = str(item.get("instrument", self.instrument))
+            for side, direction in (("long", "BUY"), ("short", "SELL")):
+                side_data = item.get(side, {})
+                units = abs(float(side_data.get("units", 0.0)))
+                if units == 0.0:
+                    continue
+                price = float(side_data.get("averagePrice", 0.0))
+                positions.append(
+                    PositionRecord(
+                        position_id=f"{instrument}_{side}",
+                        instrument=instrument,
+                        direction=direction,
+                        open_price=price,
+                        current_price=price,
+                        lot_size=units,
+                        stop_loss=0.0,
+                        take_profit=0.0,
+                        open_time=datetime.now(UTC),
+                        unrealised_pnl=float(side_data.get("unrealizedPL", 0.0)),
+                        broker="oanda",
+                    )
+                )
+        return positions
+
+    def get_current_spread_pips(self, instrument: str) -> float:
+        response = self._pricing(instrument)
+        price = response.get("prices", [{}])[0]
+        bid = float(price.get("bids", [{"price": 0.0}])[0]["price"])
+        ask = float(price.get("asks", [{"price": bid}])[0]["price"])
+        return (ask - bid) / float(self.risk_settings.get("pip_size", 0.01))
+
+    def _order_payload(self, order: RiskOrder) -> dict[str, Any]:
+        instruction = order.instruction
+        units = float(order.lot_size) if instruction.direction == "BUY" else -float(order.lot_size)
+        return {
+            "type": "LIMIT",
+            "instrument": self.instrument,
+            "units": str(units),
+            "price": str(round(instruction.entry_price, 2)),
+            "stopLossOnFill": {"price": str(round(instruction.stop_loss, 2))},
+            "takeProfitOnFill": {"price": str(round(instruction.take_profit, 2))},
+            "timeInForce": "GTC",
+        }
+
+    def _client_instance(self) -> Any:
+        if self._client is not None:
+            return self._client
+        api_key = os.getenv(str(self.oanda_settings.get("api_key_env", "OANDA_API_KEY")))
+        if not api_key:
+            raise RuntimeError("Missing OANDA_API_KEY")
+        try:
+            from oandapyV20 import API
+        except ImportError as exc:
+            raise RuntimeError("oandapyV20 is required for OandaBroker") from exc
+        self._client = API(access_token=api_key, environment=self.environment)
+        return self._client
+
+    def _submit_limit_order(self, data: dict[str, Any]) -> dict[str, Any]:
+        from oandapyV20.endpoints.orders import OrderCreate
+
+        endpoint = OrderCreate(self.account_id, data=data)
+        return self._client_instance().request(endpoint)
+
+    def _close_oanda_position(self, position_id: str) -> dict[str, Any]:
+        from oandapyV20.endpoints.positions import PositionClose
+
+        data = {"longUnits": "ALL", "shortUnits": "ALL"}
+        endpoint = PositionClose(self.account_id, instrument=position_id, data=data)
+        return self._client_instance().request(endpoint)
+
+    def _account_summary(self) -> dict[str, Any]:
+        from oandapyV20.endpoints.accounts import AccountSummary
+
+        return self._client_instance().request(AccountSummary(self.account_id))
+
+    def _open_positions(self) -> dict[str, Any]:
+        from oandapyV20.endpoints.positions import OpenPositions
+
+        return self._client_instance().request(OpenPositions(self.account_id))
+
+    def _pricing(self, instrument: str) -> dict[str, Any]:
+        from oandapyV20.endpoints.pricing import PricingInfo
+
+        endpoint = PricingInfo(self.account_id, params={"instruments": instrument})
+        return self._client_instance().request(endpoint)
+
+
+def _rejected_order_result(order: RiskOrder, reason: str, broker: str) -> OrderResult:
+    instruction = order.instruction
+    return OrderResult(
+        success=False,
+        order_id=None,
+        fill_price=None,
+        fill_time=None,
+        lot_size=float(order.lot_size),
+        direction=instruction.direction,
+        stop_loss=float(instruction.stop_loss),
+        take_profit=float(instruction.take_profit),
+        rejection_reason=reason,
+        broker=broker,
+        raw_response={"rejection_reason": reason, "warnings": list(order.warnings)},
+    )
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return datetime.now(UTC)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return datetime.now(UTC)
+
+
+__all__ = ["BrokerBase", "OandaBroker", "OrderResult", "PaperBroker", "PositionRecord"]
