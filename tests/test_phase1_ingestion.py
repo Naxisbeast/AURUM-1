@@ -259,6 +259,20 @@ SILVER - COMMODITY EXCHANGE INC.,2026-05-19,100000,60000,50000
         self.assertEqual(frame.loc[0, "net_positioning"], 50000)
         self.assertAlmostEqual(frame.loc[0, "cot_net_long_pct"], 0.25)
 
+    def test_cot_parser_handles_headerless_cftc_disaggregated_rows(self) -> None:
+        raw_csv = """WHEAT-SRW - CHICAGO BOARD OF TRADE,260519,2026-05-19,A10,CBT,0,001,100000,1,2,3,4,5,60000,50000
+GOLD - COMMODITY EXCHANGE INC.,260519,2026-05-19,088691,CMX,0,088,200000,1,2,3,4,5,120000,70000
+SILVER - COMMODITY EXCHANGE INC.,260519,2026-05-19,084691,CMX,0,084,100000,1,2,3,4,5,60000,50000
+"""
+        with tempfile.TemporaryDirectory() as tempdir:
+            ingestor = AurumDataIngestor(make_settings(Path(tempdir) / "aurum.sqlite3"))
+            frame = ingestor._parse_cot_data(raw_csv)
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame.loc[0, "market_name"], "GOLD - COMMODITY EXCHANGE INC.")
+        self.assertEqual(frame.loc[0, "net_positioning"], 50000)
+        self.assertAlmostEqual(frame.loc[0, "cot_net_long_pct"], 0.25)
+
     def test_cot_parser_raises_on_missing_columns(self) -> None:
         raw_csv = """Market_and_Exchange_Names,Report_Date_as_YYYY-MM-DD,Open_Interest_All,Other_Long,Other_Short
 GOLD - COMMODITY EXCHANGE INC.,2026-05-19,200000,120000,70000
