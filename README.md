@@ -35,6 +35,16 @@ git@github.com:Naxisbeast/AURUM-1.git
 
 Runtime secrets belong only in `/opt/aurum1/.env`. Do not commit `.env`.
 Use `.env.example` as the placeholder template.
+Keep `ALLOW_OANDA_ORDERS=false` and `ALLOW_LIVE_TRADING=false` unless you
+are deliberately testing the external OANDA broker; live capital must remain
+disabled.
+
+Run the services as a dedicated non-root user:
+
+```bash
+sudo useradd --system --home /opt/aurum1 --shell /usr/sbin/nologin aurum1
+sudo chown -R aurum1:aurum1 /opt/aurum1
+```
 
 Safe update flow:
 

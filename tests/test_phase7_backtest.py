@@ -25,6 +25,7 @@ from aurum1.execution import PaperBroker
 from aurum1.risk import AccountState, RiskOrder
 from aurum1.signals import CandleRow, TradeInstruction
 from aurum1.signals import MachineMode
+from scripts.run_backtest import validate_backtest_history
 
 
 _CACHED_RESULT: BacktestResult | None = None
@@ -325,6 +326,28 @@ def test_walk_forward_defaults_non_overlapping() -> None:
 
     assert config["backtesting"]["step_bars"] == config["backtesting"]["test_bars"]
     assert config["backtesting"]["allow_overlap"] is False
+
+
+def test_backtest_history_gate_rejects_short_history() -> None:
+    ohlcv = synthetic_ohlcv(500)
+
+    with pytest.raises(RuntimeError, match="Insufficient backtest history"):
+        validate_backtest_history(ohlcv, settings(), min_bars=20000, min_days=250.0)
+
+
+def test_backtest_history_gate_allows_explicit_short_plumbing() -> None:
+    ohlcv = synthetic_ohlcv(500)
+
+    status = validate_backtest_history(
+        ohlcv,
+        settings(),
+        allow_short_history=True,
+        min_bars=20000,
+        min_days=250.0,
+    )
+
+    assert status["short_history"] is True
+    assert status["quantitative_readiness"] == "not_verified"
 
 
 def test_backtest_uses_isolated_database_by_default() -> None:

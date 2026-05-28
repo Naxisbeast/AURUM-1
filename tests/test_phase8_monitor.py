@@ -125,3 +125,13 @@ def test_dashboard_binds_localhost_by_default() -> None:
     settings = load_settings(Path(__file__).resolve().parents[1] / "aurum1" / "config" / "settings.yaml")
 
     assert settings["monitor"]["dashboard_host"] == "127.0.0.1"
+
+
+def test_deployment_services_do_not_run_as_root() -> None:
+    root = Path(__file__).resolve().parents[1]
+
+    for path in (root / "deploy" / "aurum1.service.template", root / "deploy" / "dashboard.service.template"):
+        text = path.read_text(encoding="utf-8")
+        assert "User=aurum1" in text
+        assert "Group=aurum1" in text
+        assert "User=root" not in text

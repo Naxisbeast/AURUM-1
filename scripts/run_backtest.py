@@ -32,6 +32,9 @@ from aurum1.features.engineer import FeatureEngineer
 from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
 from aurum1.signals import MachineMode
 
+MIN_BACKTEST_HISTORY_BARS = 20000
+MIN_BACKTEST_HISTORY_DAYS = 250.0
+
 
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
@@ -47,6 +50,19 @@ def main(argv: list[str] | None = None) -> int:
         allow_proxy=args.allow_gold_futures_proxy,
         allow_synthetic=args.allow_synthetic,
     )
+    try:
+        history_status = validate_backtest_history(
+            ohlcv,
+            settings,
+            allow_short_history=args.allow_short_history,
+            min_bars=args.min_history_bars,
+            min_days=args.min_history_days,
+        )
+    except RuntimeError as exc:
+        print("Quantitative readiness: not verified")
+        print(f"Reason: {exc}")
+        return 2
+
     macro, macro_status = load_backtest_macro(settings, ohlcv, allow_placeholder=args.allow_placeholder_data)
     cot, cot_status = load_backtest_cot(settings, ohlcv, allow_placeholder=args.allow_placeholder_data)
     settings = tune_backtest_windows(settings, len(ohlcv))
@@ -54,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    print_header(settings, ohlcv, data_label, macro_status, cot_status)
+    print_header(settings, ohlcv, data_label, macro_status, cot_status, history_status)
     print_signal_audit(ohlcv, macro, cot, settings)
 
     walk_forward = WalkForwardValidator(settings).run(
@@ -87,10 +103,12 @@ def main(argv: list[str] | None = None) -> int:
 
     best_mode, best_result = max(ablation.items(), key=lambda item: item[1].sharpe_ratio)
     recommendation = (
-        "quantitative gate passed; Phase 11.1 safety approval still required before paper trading"
+        "quantitative gate passed; eligible for supervised internal paper candidate review, not auto-started"
         if walk_forward.promotion_gate_passed and monte_carlo.ruin_probability < 0.05
         else "review risk params"
     )
+    if history_status["short_history"]:
+        recommendation = "short-history plumbing run; quantitative readiness not verified"
     if walk_forward.mean_sharpe <= 0.0 or walk_forward.mean_profit_factor < 1.0:
         recommendation = "retrain models"
 
@@ -136,6 +154,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow synthetic OHLCV fallback for plumbing checks only.",
     )
+    parser.add_argument(
+        "--allow-short-history",
+        action="store_true",
+        help="Allow a short-history plumbing run; quantitative readiness remains not verified.",
+    )
+    parser.add_argument(
+        "--min-history-bars",
+        type=int,
+        default=None,
+        help="Minimum M15 bars required for quantitative readiness.",
+    )
+    parser.add_argument(
+        "--min-history-days",
+        type=float,
+        default=None,
+        help="Minimum calendar-day span required for quantitative readiness.",
+    )
     return parser.parse_args(argv)
 
 
@@ -169,6 +204,47 @@ def configure_backtest_isolation(settings: dict[str, Any]) -> dict[str, Any]:
     isolated["data"]["db_path"] = market_db
     isolated["execution"]["db_path"] = str(execution_db)
     return isolated
+
+
+def validate_backtest_history(
+    ohlcv: pd.DataFrame,
+    settings: dict[str, Any],
+    *,
+    allow_short_history: bool = False,
+    min_bars: int | None = None,
+    min_days: float | None = None,
+) -> dict[str, Any]:
+    backtesting = settings.get("backtesting", {})
+    required_bars = int(min_bars or backtesting.get("min_history_bars", MIN_BACKTEST_HISTORY_BARS))
+    required_days = float(min_days or backtesting.get("min_history_days", MIN_BACKTEST_HISTORY_DAYS))
+    bars = int(len(ohlcv))
+    if bars == 0:
+        span_days = 0.0
+    else:
+        index = pd.DatetimeIndex(ohlcv.index)
+        start = pd.Timestamp(index.min())
+        end = pd.Timestamp(index.max())
+        span_days = max(0.0, float((end - start).total_seconds() / 86400.0))
+    short_reasons: list[str] = []
+    if bars < required_bars:
+        short_reasons.append(f"{bars} bars < required {required_bars}")
+    if span_days < required_days:
+        short_reasons.append(f"{span_days:.1f} days < required {required_days:.1f}")
+    if short_reasons and not allow_short_history:
+        raise RuntimeError(
+            "Insufficient backtest history for quantitative readiness: "
+            + "; ".join(short_reasons)
+            + ". Rebuild the real OANDA cache or rerun with --allow-short-history for plumbing only."
+        )
+    return {
+        "bars": bars,
+        "span_days": span_days,
+        "min_bars": required_bars,
+        "min_days": required_days,
+        "short_history": bool(short_reasons),
+        "short_reasons": short_reasons,
+        "quantitative_readiness": "not_verified" if short_reasons else "eligible",
+    }
 
 
 def print_promotion_gate(walk_forward: Any) -> None:
@@ -316,7 +392,7 @@ def _oanda_cache_frame(db_path: Path) -> pd.DataFrame:
         frame = frame[frame["source"].astype(str).str.lower() == "oanda"]
     if "instrument" in frame.columns:
         frame = frame[frame["instrument"].astype(str).eq("XAU_USD")]
-    return frame.tail(DEFAULT_OANDA_BACKTEST_COUNT).copy()
+    return frame.sort_index().copy()
 
 
 def _gold_futures_proxy(settings: dict[str, Any]) -> tuple[pd.DataFrame, str]:
@@ -415,6 +491,7 @@ def print_header(
     data_label: str,
     macro_status: str,
     cot_status: str,
+    history_status: dict[str, Any],
 ) -> None:
     start = ohlcv.index.min().isoformat() if len(ohlcv) else "n/a"
     end = ohlcv.index.max().isoformat() if len(ohlcv) else "n/a"
@@ -425,6 +502,13 @@ def print_header(
     print(f"Date range: {start} -> {end}")
     print(f"Macro data: {macro_status}")
     print(f"COT data:   {cot_status}")
+    print(
+        "History:    "
+        f"{history_status['bars']} bars over {history_status['span_days']:.1f} days "
+        f"(minimum {history_status['min_bars']} bars / {history_status['min_days']:.1f} days)"
+    )
+    if history_status["short_history"]:
+        print("History gate: SHORT-HISTORY PLUMBING ONLY; quantitative readiness not verified")
     print(f"Runtime DB: {settings.get('backtesting', {}).get('runtime_db_path', 'aurum1/data/aurum1.sqlite3')} (no backtest execution writes)")
     print(f"Market DB:  {settings.get('data', {}).get('db_path', 'aurum1/data/backtest_market_cache.sqlite3')}")
     print(f"Backtest DB:{settings.get('backtesting', {}).get('execution_db_path', 'temp per run')}")

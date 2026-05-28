@@ -268,6 +268,7 @@ def load_macro(db_path: str | Path) -> pd.DataFrame:
     frame = frame.set_index("date")
     for column in MACRO_NUMERIC_COLUMNS:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
+    frame[["dxy_daily_return", "vix_1d_change"]] = frame[["dxy_daily_return", "vix_1d_change"]].fillna(0.0)
     return frame.sort_index()
 
 
@@ -459,8 +460,8 @@ class AurumDataIngestor:
 
         frame = pd.concat([dgs10, cpi, cpi_yoy, dxy, vix], axis=1).sort_index().ffill()
         frame["real_yield"] = frame["dgs10"] - frame["cpi_yoy"]
-        frame["dxy_daily_return"] = frame["dxy"].pct_change()
-        frame["vix_1d_change"] = frame["vix"].diff()
+        frame["dxy_daily_return"] = frame["dxy"].pct_change().fillna(0.0)
+        frame["vix_1d_change"] = frame["vix"].diff().fillna(0.0)
         frame.index = pd.to_datetime(frame.index, utc=True).date
         frame = frame.reset_index(names="date")
         frame["date"] = frame["date"].map(lambda value: value.isoformat())
