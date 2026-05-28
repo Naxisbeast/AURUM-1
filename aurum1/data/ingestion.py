@@ -466,10 +466,22 @@ class AurumDataIngestor:
         return self._ensure_columns(frame[MACRO_COLUMNS], MACRO_COLUMNS)
 
     def fetch_cot_data(self) -> pd.DataFrame:
-        """Fetch and parse the CFTC COT report for gold futures positioning."""
+        """Fetch and parse real CFTC COT reports for gold futures positioning.
 
-        raw = self._fetch_cot_raw_text()
-        return self._parse_cot_data(raw)
+        The CFTC publishes annual historical ZIP files and a separate current
+        weekly text file. Fetching a small set of recent annual files keeps the
+        SQLite cache useful for backtests while the current file protects us
+        when a new annual ZIP has not appeared yet.
+        """
+
+        frames = [self._parse_cot_data(raw) for raw in self._fetch_cot_raw_texts()]
+        frames = [frame for frame in frames if not frame.empty]
+        if not frames:
+            return self._empty_frame(COT_COLUMNS)
+        combined = pd.concat(frames, ignore_index=True)
+        combined = combined.drop_duplicates(subset=["report_date", "market_name"], keep="last")
+        combined = combined.sort_values("report_date").reset_index(drop=True)
+        return self._ensure_columns(combined, COT_COLUMNS)
 
     def fetch_news_headlines(self) -> pd.DataFrame:
         """Fetch recent Alpha Vantage news sentiment headlines for Gold/FX topics."""
@@ -701,14 +713,68 @@ class AurumDataIngestor:
         return close.astype(float)
 
     def _fetch_cot_raw_text(self) -> str:
-        cot_settings = self.data_settings.get("cot", {})
-        url = str(cot_settings.get("source_url"))
-        content = self.retry_call(lambda: self._http_get_bytes(url), label="cftc_cot")
+        return self._fetch_cot_raw_texts(max_successes=1)[0]
+
+    def _fetch_cot_raw_texts(self, max_successes: int | None = None) -> list[str]:
+        texts: list[str] = []
+        errors: list[str] = []
+        for url in self._candidate_cot_urls():
+            try:
+                content = self.retry_call(lambda url=url: self._http_get_bytes(url), label=f"cftc_cot:{url}")
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+                continue
+            texts.append(self._decode_cot_content(content))
+            if max_successes is not None and len(texts) >= max_successes:
+                break
+        if not texts:
+            searched = "; ".join(errors) if errors else "no COT URLs configured"
+            raise ProviderError(f"CFTC COT fetch failed for all candidate URLs: {searched}")
+        return texts
+
+    def _decode_cot_content(self, content: bytes) -> str:
         if zipfile.is_zipfile(io.BytesIO(content)):
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 first_name = archive.namelist()[0]
                 return archive.read(first_name).decode("utf-8", errors="replace")
         return content.decode("utf-8", errors="replace")
+
+    def _candidate_cot_urls(self) -> list[str]:
+        cot_settings = self.data_settings.get("cot", {})
+        urls: list[str] = []
+        current_year = datetime.now(UTC).year
+        history_years = int(cot_settings.get("history_years", 2))
+        years = range(current_year, current_year - max(history_years, 1), -1)
+
+        template = str(cot_settings.get("source_url_template", "")).strip()
+        if template:
+            urls.extend(template.format(year=year) for year in years)
+
+        configured_url = str(cot_settings.get("source_url", "")).strip()
+        if configured_url:
+            if "{year}" in configured_url:
+                urls.extend(configured_url.format(year=year) for year in years)
+            else:
+                urls.append(configured_url)
+                match = re.search(r"(?P<prefix>.*?)(?P<year>20\d{2})(?P<suffix>[^/]*)$", configured_url)
+                if match:
+                    prefix = match.group("prefix")
+                    suffix = match.group("suffix")
+                    configured_year = int(match.group("year"))
+                    for year in range(configured_year - 1, configured_year - max(history_years, 1), -1):
+                        urls.append(f"{prefix}{year}{suffix}")
+
+        current_url = str(cot_settings.get("current_url", "https://www.cftc.gov/dea/newcot/f_disagg.txt")).strip()
+        if current_url:
+            urls.append(current_url)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            if url and url not in seen:
+                deduped.append(url)
+                seen.add(url)
+        return deduped
 
     def _parse_cot_data(self, raw_csv: str) -> pd.DataFrame:
         """Parse CFTC disaggregated futures-only COT data.

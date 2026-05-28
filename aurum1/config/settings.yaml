@@ -42,7 +42,9 @@
       "vix_symbol": "^VIX"
     },
     "cot": {
-      "source_url": "https://www.cftc.gov/dea/newcot/f_disagg_txt_2026.zip",
+      "source_url_template": "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip",
+      "current_url": "https://www.cftc.gov/dea/newcot/f_disagg.txt",
+      "history_years": 2,
       "market_filter": "GOLD"
     },
     "calendar": {
