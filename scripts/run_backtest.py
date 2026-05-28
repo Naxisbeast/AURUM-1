@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
 
     settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
+    settings = configure_backtest_isolation(settings)
     ohlcv, data_label = load_backtest_ohlcv(
         settings,
         allow_proxy=args.allow_gold_futures_proxy,
@@ -82,9 +83,14 @@ def main(argv: list[str] | None = None) -> int:
         print_backtest_report(result)
         save_backtest_report(result, reports_dir / f"backtest_{mode_name}.json")
         plot_equity_curve(result, reports_dir / f"equity_{mode_name}.png")
+    print_mode_diagnostics(ablation)
 
     best_mode, best_result = max(ablation.items(), key=lambda item: item[1].sharpe_ratio)
-    recommendation = "proceed to paper trading" if walk_forward.promotion_gate_passed and monte_carlo.ruin_probability < 0.05 else "review risk params"
+    recommendation = (
+        "quantitative gate passed; Phase 11.1 safety approval still required before paper trading"
+        if walk_forward.promotion_gate_passed and monte_carlo.ruin_probability < 0.05
+        else "review risk params"
+    )
     if walk_forward.mean_sharpe <= 0.0 or walk_forward.mean_profit_factor < 1.0:
         recommendation = "retrain models"
 
@@ -147,6 +153,24 @@ def load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 
+def configure_backtest_isolation(settings: dict[str, Any]) -> dict[str, Any]:
+    isolated = copy.deepcopy(settings)
+    runtime_db = str(isolated.get("data", {}).get("db_path", "aurum1/data/aurum1.sqlite3"))
+    isolated.setdefault("backtesting", {})
+    isolated.setdefault("data", {})
+    isolated.setdefault("execution", {})
+    market_db = str(isolated["backtesting"].get("market_data_db_path", "aurum1/data/backtest_market_cache.sqlite3"))
+    execution_db = isolated["backtesting"].get("execution_db_path")
+    if not execution_db:
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        execution_db = str(Path("reports") / f"backtest_execution_{stamp}.sqlite3")
+        isolated["backtesting"]["execution_db_path"] = execution_db
+    isolated["backtesting"]["runtime_db_path"] = runtime_db
+    isolated["data"]["db_path"] = market_db
+    isolated["execution"]["db_path"] = str(execution_db)
+    return isolated
+
+
 def print_promotion_gate(walk_forward: Any) -> None:
     status = "PASSED" if walk_forward.promotion_gate_passed else "FAILED"
     detail = walk_forward.criteria_detail
@@ -182,6 +206,58 @@ def print_walk_forward_detail(windows: list[Any]) -> None:
         )
     print(f"\n  Positive Sharpe windows: {positive}/{len(windows)}")
     print(f"  Negative Sharpe windows: {negative}/{len(windows)}")
+
+
+def print_mode_diagnostics(ablation: dict[str, Any]) -> None:
+    baseline = ablation.get(MachineMode.RULE_ONLY.value)
+    if baseline is None:
+        return
+    baseline_entries = _trade_entry_keys(baseline.trades)
+    baseline_exits = _trade_exit_keys(baseline.trades)
+    baseline_equity = np.asarray(baseline.equity_curve, dtype=float)
+    print("\nMode diagnostics vs rule_only:")
+    for mode_name, result in ablation.items():
+        if mode_name == MachineMode.RULE_ONLY.value:
+            continue
+        entries = _trade_entry_keys(result.trades)
+        exits = _trade_exit_keys(result.trades)
+        equity = np.asarray(result.equity_curve, dtype=float)
+        equity_diff = 0.0
+        if len(equity) == len(baseline_equity) and len(equity):
+            equity_diff = float(np.max(np.abs(equity - baseline_equity)))
+        pnl_diff = float(result.final_equity - baseline.final_equity)
+        entries_changed = len(entries.symmetric_difference(baseline_entries))
+        exits_changed = len(exits.symmetric_difference(baseline_exits))
+        trades_changed = abs(result.total_trades - baseline.total_trades) + entries_changed
+        print(
+            f"  {mode_name}: trades_changed={trades_changed} "
+            f"entries_changed={entries_changed} exits_changed={exits_changed} "
+            f"pnl_diff={pnl_diff:.2f} equity_curve_max_diff={equity_diff:.2f}"
+        )
+        if trades_changed == 0 and exits_changed == 0 and abs(pnl_diff) < 1e-9 and equity_diff < 1e-9:
+            print(f"    ML/sentiment incremental value: not evidenced; trade list identical to rule_only.")
+
+
+def _trade_entry_keys(trades: list[dict[str, Any]]) -> set[tuple[str, str, float]]:
+    return {
+        (
+            str(trade.get("open_time", trade.get("timestamp", ""))),
+            str(trade.get("direction", "")),
+            round(float(trade.get("entry", trade.get("open_price", 0.0))), 2),
+        )
+        for trade in trades
+    }
+
+
+def _trade_exit_keys(trades: list[dict[str, Any]]) -> set[tuple[str, str, float]]:
+    return {
+        (
+            str(trade.get("close_time", "")),
+            str(trade.get("direction", "")),
+            round(float(trade.get("exit", trade.get("close_price", 0.0))), 2),
+        )
+        for trade in trades
+    }
 
 
 def load_backtest_ohlcv(
@@ -349,6 +425,12 @@ def print_header(
     print(f"Date range: {start} -> {end}")
     print(f"Macro data: {macro_status}")
     print(f"COT data:   {cot_status}")
+    print(f"Runtime DB: {settings.get('backtesting', {}).get('runtime_db_path', 'aurum1/data/aurum1.sqlite3')} (no backtest execution writes)")
+    print(f"Market DB:  {settings.get('data', {}).get('db_path', 'aurum1/data/backtest_market_cache.sqlite3')}")
+    print(f"Backtest DB:{settings.get('backtesting', {}).get('execution_db_path', 'temp per run')}")
+    print("Runtime DB writes: disabled for backtest execution/output")
+    print("Sharpe frequency: daily returns")
+    print(f"WF overlap: {'yes' if settings.get('backtesting', {}).get('allow_overlap', False) else 'no'}")
     print(
         "Window:     "
         f"train={settings['backtesting']['train_bars']} "
@@ -415,8 +497,9 @@ def tune_backtest_windows(settings: dict[str, Any], rows: int) -> dict[str, Any]
         test = max(100, int(rows * 0.25))
         if train + test > rows:
             test = max(100, rows - train)
-        step = max(50, test // 2)
+        step = test
         tuned["backtesting"].update({"train_bars": train, "test_bars": test, "step_bars": step})
+    tuned["backtesting"].setdefault("allow_overlap", False)
     tuned.setdefault("signals", {})
     tuned["signals"].setdefault("require_session_filter", False)
     tuned["signals"].setdefault("adx_threshold", 10)

@@ -1,0 +1,17 @@
+[Unit]
+Description=AURUM-1 local monitoring dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aurum1
+EnvironmentFile=/opt/aurum1/.env
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/run_dashboard.py
+Restart=on-failure
+RestartSec=10
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

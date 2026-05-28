@@ -183,7 +183,8 @@ class Orchestrator:
             self.status = "error"
             raise OrchestratorInitError(f"Failed to initialise AURUM-1 component: {exc}") from exc
 
-        self._load_deployed_models()
+        deployed_model_status = self._load_deployed_models()
+        self._assert_mode_model_readiness(deployed_model_status)
         self.candidate_regime_classifier: RegimeClassifier | None = None
         self.candidate_direction_predictor: DirectionPredictor | None = None
         self.candidate_ensemble: EnsembleSignal | None = None
@@ -736,6 +737,15 @@ class Orchestrator:
         except Exception as exc:
             logger.warning("{} artifact load failed from {}: {}", model_name, path, exc)
             return _LoadedModelStatus(model_name, False, str(path))
+
+    def _assert_mode_model_readiness(self, statuses: list[_LoadedModelStatus]) -> None:
+        if self.mode != MachineMode.FULL_ENSEMBLE:
+            return
+        missing = [status.model_name for status in statuses if not status.loaded]
+        if missing and not bool(self.orchestrator_settings.get("allow_model_fallback", False)):
+            raise OrchestratorInitError(
+                "FULL_ENSEMBLE requires real deployed model artifacts; missing: " + ", ".join(missing)
+            )
 
     def _closed_trade_history(self) -> list[dict[str, Any]]:
         broker_history = getattr(self.execution_engine.broker, "_trade_history", None)

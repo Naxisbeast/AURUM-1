@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from aurum1.instruments import InstrumentSpec
 from aurum1.risk import AccountState, RiskOrder
 from aurum1.signals import CandleRow
 
@@ -73,6 +74,7 @@ class PaperBroker(BrokerBase):
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
         self.risk_settings = settings.get("risk", {})
+        self.instrument_spec = InstrumentSpec.from_settings(settings)
         self.execution_settings = settings.get("execution", {})
         self.broker_settings = settings.get("broker", {})
         self.instrument = str(self.broker_settings.get("oanda", {}).get("instrument", "XAU_USD"))
@@ -153,18 +155,18 @@ class PaperBroker(BrokerBase):
         close_queue: list[tuple[str, float, str]] = []
         for position_id, position in list(self._positions.items()):
             if position.direction == "BUY":
-                if candle.high >= position.take_profit:
-                    close_queue.append((position_id, position.take_profit, "take_profit"))
-                    continue
                 if candle.low <= position.stop_loss:
                     close_queue.append((position_id, position.stop_loss, "stop_loss"))
                     continue
-            else:
-                if candle.low <= position.take_profit:
+                if candle.high >= position.take_profit:
                     close_queue.append((position_id, position.take_profit, "take_profit"))
                     continue
+            else:
                 if candle.high >= position.stop_loss:
                     close_queue.append((position_id, position.stop_loss, "stop_loss"))
+                    continue
+                if candle.low <= position.take_profit:
+                    close_queue.append((position_id, position.take_profit, "take_profit"))
                     continue
             position.current_price = float(candle.close)
             position.unrealised_pnl = self._pnl(position, float(candle.close))
@@ -225,10 +227,8 @@ class PaperBroker(BrokerBase):
         )
 
     def _pnl(self, position: PositionRecord, close_price: float) -> float:
-        pip_size = float(self.risk_settings.get("pip_size", 0.01))
-        if position.direction == "BUY":
-            return (close_price - position.open_price) * position.lot_size / pip_size
-        return (position.open_price - close_price) * position.lot_size / pip_size
+        units = self.instrument_spec.lots_to_units(position.lot_size)
+        return self.instrument_spec.pnl(position.direction, position.open_price, close_price, units)
 
 
 class OandaBroker(BrokerBase):
@@ -237,6 +237,7 @@ class OandaBroker(BrokerBase):
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
         self.risk_settings = settings.get("risk", {})
+        self.instrument_spec = InstrumentSpec.from_settings(settings)
         self.execution_settings = settings.get("execution", {})
         self.oanda_settings = settings.get("broker", {}).get("oanda", {})
         self.instrument = str(self.oanda_settings.get("instrument", "XAU_USD"))
@@ -245,6 +246,7 @@ class OandaBroker(BrokerBase):
             str(self.oanda_settings.get("environment_env", "OANDA_ENV")),
             str(self.oanda_settings.get("default_environment", "practice")),
         )
+        _assert_oanda_interlocks(self.environment)
         self._client: Any | None = None
 
     def submit_order(self, order: RiskOrder) -> OrderResult:
@@ -291,12 +293,13 @@ class OandaBroker(BrokerBase):
     def close_position(self, position_id: str, reason: str) -> OrderResult:
         response = self._close_oanda_position(position_id)
         close_txn = response.get("longOrderFillTransaction") or response.get("shortOrderFillTransaction") or {}
+        closed_units = abs(float(close_txn.get("units", 0.0))) if close_txn.get("units") is not None else 0.0
         return OrderResult(
             success=True,
             order_id=str(close_txn.get("id", position_id)),
             fill_price=float(close_txn.get("price", 0.0)) if close_txn.get("price") is not None else None,
             fill_time=_parse_datetime(close_txn.get("time")),
-            lot_size=abs(float(close_txn.get("units", 0.0))) if close_txn.get("units") is not None else 0.0,
+            lot_size=self.instrument_spec.units_to_lots(closed_units),
             direction="CLOSE",
             stop_loss=0.0,
             take_profit=0.0,
@@ -338,7 +341,7 @@ class OandaBroker(BrokerBase):
                         direction=direction,
                         open_price=price,
                         current_price=price,
-                        lot_size=units,
+                        lot_size=self.instrument_spec.units_to_lots(units),
                         stop_loss=0.0,
                         take_profit=0.0,
                         open_time=datetime.now(UTC),
@@ -357,11 +360,12 @@ class OandaBroker(BrokerBase):
 
     def _order_payload(self, order: RiskOrder) -> dict[str, Any]:
         instruction = order.instruction
-        units = float(order.lot_size) if instruction.direction == "BUY" else -float(order.lot_size)
+        units_value = order.units or self.instrument_spec.lots_to_units(order.lot_size)
+        units = units_value if instruction.direction == "BUY" else -units_value
         return {
             "type": "LIMIT",
             "instrument": self.instrument,
-            "units": str(units),
+            "units": self.instrument_spec.format_units(units),
             "price": str(round(instruction.entry_price, 2)),
             "stopLossOnFill": {"price": str(round(instruction.stop_loss, 2))},
             "takeProfitOnFill": {"price": str(round(instruction.take_profit, 2))},
@@ -426,6 +430,17 @@ def _rejected_order_result(order: RiskOrder, reason: str, broker: str) -> OrderR
         broker=broker,
         raw_response={"rejection_reason": reason, "warnings": list(order.warnings)},
     )
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _assert_oanda_interlocks(environment: str) -> None:
+    if not _truthy_env("ALLOW_OANDA_ORDERS"):
+        raise RuntimeError("External OANDA orders blocked: set ALLOW_OANDA_ORDERS=true to enable practice/live broker mode")
+    if str(environment).lower() == "live" and not _truthy_env("ALLOW_LIVE_TRADING"):
+        raise RuntimeError("Live OANDA trading blocked: set ALLOW_LIVE_TRADING=true in addition to ALLOW_OANDA_ORDERS=true")
 
 
 def _parse_datetime(value: Any) -> datetime | None:

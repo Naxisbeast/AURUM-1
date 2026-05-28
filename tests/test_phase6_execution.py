@@ -232,7 +232,8 @@ def test_execution_engine_logs_rejection() -> None:
     assert "low_confidence" in rows[0][1]
 
 
-def test_oanda_broker_submit_mocked() -> None:
+def test_oanda_broker_submit_mocked(monkeypatch) -> None:
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
     broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
     broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
     broker._submit_limit_order = lambda data: {  # type: ignore[method-assign]
@@ -244,6 +245,31 @@ def test_oanda_broker_submit_mocked() -> None:
     assert result.success is True
     assert result.order_id == "123"
     assert result.broker == "oanda"
+
+
+def test_oanda_practice_requires_oanda_orders_interlock(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_OANDA_ORDERS", raising=False)
+    monkeypatch.setenv("OANDA_ENV", "practice")
+
+    try:
+        OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    except RuntimeError as exc:
+        assert "ALLOW_OANDA_ORDERS" in str(exc)
+    else:
+        raise AssertionError("Expected OandaBroker practice mode to require ALLOW_OANDA_ORDERS")
+
+
+def test_oanda_live_requires_live_trading_interlock(monkeypatch) -> None:
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    monkeypatch.delenv("ALLOW_LIVE_TRADING", raising=False)
+    monkeypatch.setenv("OANDA_ENV", "live")
+
+    try:
+        OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    except RuntimeError as exc:
+        assert "ALLOW_LIVE_TRADING" in str(exc)
+    else:
+        raise AssertionError("Expected OandaBroker live mode to require ALLOW_LIVE_TRADING")
 
 
 def test_close_all_positions_paper() -> None:

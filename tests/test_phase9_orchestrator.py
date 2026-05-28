@@ -11,7 +11,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from aurum1.orchestrator import Orchestrator
+from aurum1.orchestrator import Orchestrator, OrchestratorInitError
 from aurum1.risk import AccountState
 from aurum1.signals import CandleRow, MachineMode
 
@@ -121,6 +121,17 @@ def test_orchestrator_initialises_all_components() -> None:
     ]
     assert all(component is not None for component in components)
     assert {"status", "equity", "active_mode", "broker"}.issubset(orchestrator.get_health())
+
+
+def test_missing_model_artifacts_block_full_ensemble() -> None:
+    with tempfile.TemporaryDirectory() as tempdir:
+        settings = make_settings(
+            Path(tempdir) / "aurum.sqlite3",
+            {"orchestrator": {"mode": "full_ensemble"}, "models": {"model_dir": str(Path(tempdir) / "models")}},
+        )
+
+        with pytest.raises(OrchestratorInitError, match="FULL_ENSEMBLE requires real deployed model artifacts"):
+            Orchestrator(settings)
 
 
 def test_orchestrator_processes_single_candle() -> None:
