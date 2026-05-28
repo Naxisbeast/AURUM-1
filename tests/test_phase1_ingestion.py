@@ -274,6 +274,33 @@ GOLD - COMMODITY EXCHANGE INC.,2026-05-19,200000,120000,70000
         self.assertIn("NonComm_Positions_Long_All", message)
         self.assertIn("Other_Long", message)
 
+    def test_cot_fetch_falls_back_to_previous_available_year(self) -> None:
+        raw_csv = """Market_and_Exchange_Names,Report_Date_as_YYYY-MM-DD,Open_Interest_All,M_Money_Positions_Long_All,M_Money_Positions_Short_All
+GOLD - COMMODITY EXCHANGE INC.,2025-12-30,200000,120000,70000
+"""
+        with tempfile.TemporaryDirectory() as tempdir:
+            settings = make_settings(Path(tempdir) / "aurum.sqlite3")
+            settings["data"]["cot"] = {
+                "source_url": "https://example.test/f_disagg_txt_2026.zip",
+                "current_url": "",
+                "history_years": 2,
+                "market_filter": "GOLD",
+            }
+            ingestor = AurumDataIngestor(settings)
+            requested_urls: list[str] = []
+
+            def fake_get_bytes(url: str) -> bytes:
+                requested_urls.append(url)
+                if "2026" in url:
+                    raise RuntimeError("404")
+                return raw_csv.encode("utf-8")
+
+            ingestor._http_get_bytes = fake_get_bytes  # type: ignore[method-assign]
+            text = ingestor._fetch_cot_raw_text()
+
+        self.assertIn("GOLD - COMMODITY EXCHANGE INC.", text)
+        self.assertTrue(any("2025" in url for url in requested_urls))
+
     def test_economic_calendar_blackout_window(self) -> None:
         html = """
         <table>
