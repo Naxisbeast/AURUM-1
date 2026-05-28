@@ -16,6 +16,7 @@ from aurum1.data.ingestion import (
     OANDA_MAX_CANDLES_PER_REQUEST,
     ProviderError,
     initialize_database,
+    load_macro,
     load_ohlcv,
     load_settings,
     merge_macro_onto_ohlcv,
@@ -211,6 +212,30 @@ class Phase1IngestionTests(unittest.TestCase):
         self.assertAlmostEqual(last["real_yield"], -8.0)
         self.assertGreater(last["dxy_daily_return"], 0.0)
         self.assertEqual(last["vix_1d_change"], 1.0)
+
+    def test_load_macro_fills_initial_market_change_nans(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            db_path = Path(tempdir) / "aurum.sqlite3"
+            ingestor = AurumDataIngestor(make_settings(db_path))
+            frame = pd.DataFrame(
+                {
+                    "date": ["2026-01-01", "2026-01-02"],
+                    "dgs10": [4.0, 4.1],
+                    "cpi": [300.0, 300.0],
+                    "cpi_yoy": [3.0, 3.0],
+                    "real_yield": [1.0, 1.1],
+                    "dxy": [100.0, 101.0],
+                    "dxy_daily_return": [float("nan"), 0.01],
+                    "vix": [15.0, 16.0],
+                    "vix_1d_change": [float("nan"), 1.0],
+                }
+            )
+            ingestor.persist_macro_data(frame)
+
+            loaded = load_macro(db_path)
+
+        self.assertEqual(loaded.iloc[0]["dxy_daily_return"], 0.0)
+        self.assertEqual(loaded.iloc[0]["vix_1d_change"], 0.0)
 
     def test_merge_macro_onto_ohlcv_no_nans_after_warmup(self) -> None:
         index = pd.date_range("2026-05-27T22:00:00Z", periods=20, freq="15min", tz=UTC)

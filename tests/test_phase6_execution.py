@@ -247,6 +247,17 @@ def test_oanda_broker_submit_mocked(monkeypatch) -> None:
     assert result.broker == "oanda"
 
 
+def test_oanda_sell_order_payload_uses_negative_units(monkeypatch) -> None:
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    order = make_risk_order(direction="SELL", stop_loss=2340.0, take_profit=2315.0, lot_size=0.10)
+    order.units = 10.0
+
+    payload = broker._order_payload(order)
+
+    assert payload["units"] == "-10"
+
+
 def test_oanda_practice_requires_oanda_orders_interlock(monkeypatch) -> None:
     monkeypatch.delenv("ALLOW_OANDA_ORDERS", raising=False)
     monkeypatch.setenv("OANDA_ENV", "practice")

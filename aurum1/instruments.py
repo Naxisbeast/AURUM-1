@@ -79,8 +79,12 @@ class InstrumentSpec:
         clamped = max(self.min_units, min(self.max_units, float(units)))
         return round(clamped, self.unit_precision)
 
+    def round_signed_units(self, units: float) -> float:
+        sign = -1.0 if float(units) < 0.0 else 1.0
+        return sign * self.round_units(abs(float(units)))
+
     def format_units(self, units: float) -> str:
-        rounded = self.round_units(units)
+        rounded = self.round_signed_units(units)
         if self.unit_precision <= 0:
             return str(int(rounded))
         return f"{rounded:.{self.unit_precision}f}"

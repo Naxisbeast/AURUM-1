@@ -10,8 +10,13 @@ EnvironmentFile=/opt/aurum1/.env
 ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/main.py --mode rule_regime
 Restart=on-failure
 RestartSec=10
-User=root
-Group=root
+User=aurum1
+Group=aurum1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/aurum1/logs /opt/aurum1/reports /opt/aurum1/backups /opt/aurum1/aurum1/data
 
 [Install]
 WantedBy=multi-user.target
