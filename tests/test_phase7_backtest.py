@@ -19,7 +19,7 @@ from aurum1.backtesting import (
     run_monte_carlo,
 )
 from aurum1.backtesting.engine import build_backtest_result
-from aurum1.backtesting.report import plot_equity_curve
+from aurum1.backtesting.report import plot_equity_curve, print_backtest_report
 from aurum1.data.ingestion import initialize_database
 from aurum1.execution import PaperBroker
 from aurum1.risk import AccountState, RiskOrder
@@ -181,6 +181,56 @@ def test_backtest_fees_applied() -> None:
 
     assert result.total_trades >= 1
     assert result.total_fees_paid > 0
+
+
+def test_backtest_cost_attribution_fields_populated() -> None:
+    result = run_synthetic_backtest()
+
+    assert result.total_trades >= 1
+    assert result.total_gross_pnl == pytest.approx(sum(float(trade["gross_pnl"]) for trade in result.trades))
+    assert result.total_net_pnl == pytest.approx(sum(float(trade["net_pnl"]) for trade in result.trades))
+    assert result.total_spread_cost == pytest.approx(result.total_fees_paid)
+    assert result.total_spread_cost > 0.0
+    assert result.total_entry_slippage_cost == 0.0
+    assert result.total_exit_slippage_cost == 0.0
+    assert result.avg_units > 0.0
+    assert result.median_units > 0.0
+    assert result.min_units > 0.0
+    assert result.max_units >= result.min_units
+    assert all("intended_entry" in trade for trade in result.trades)
+    assert all("actual_exit" in trade for trade in result.trades)
+    assert all("units" in trade for trade in result.trades)
+
+
+def test_backtest_records_exit_slippage_when_enabled() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(settings({"execution": {"slippage_std_pips": 0.5}})).run(
+        ohlcv,
+        synthetic_macro(ohlcv),
+        synthetic_cot(ohlcv),
+    )
+
+    assert result.total_trades >= 1
+    assert result.total_entry_slippage_cost > 0.0
+    assert result.total_exit_slippage_cost > 0.0
+    assert result.total_slippage_cost == pytest.approx(
+        result.total_entry_slippage_cost + result.total_exit_slippage_cost
+    )
+
+
+def test_backtest_report_separates_gross_net_and_costs(capsys: pytest.CaptureFixture[str]) -> None:
+    result = run_synthetic_backtest()
+
+    print_backtest_report(result)
+
+    output = capsys.readouterr().out
+    assert "Gross P&L:" in output
+    assert "Avg units:" in output
+    assert "Median units:" in output
+    assert "Spread cost:" in output
+    assert "Entry slip cost:" in output
+    assert "Exit slip cost:" in output
+    assert "Net P&L:" in output
 
 
 def test_backtest_sharpe_formula() -> None:
