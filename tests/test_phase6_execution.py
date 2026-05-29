@@ -6,6 +6,8 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from aurum1.execution import ExecutionEngine, OandaBroker, PaperBroker
 from aurum1.risk import RiskOrder
 from aurum1.signals import CandleRow, TradeInstruction
@@ -165,13 +167,77 @@ def test_paper_broker_sl_closes_position() -> None:
     assert broker.get_account_state().equity < 10000.0
 
 
-def test_paper_broker_sl_uses_exact_sl_price() -> None:
+def test_paper_broker_sl_records_intended_and_actual_exit_price() -> None:
+    broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0}}).broker
+    broker.submit_order(make_risk_order(direction="BUY", stop_loss=2320.0))
+
+    broker.update_prices(make_candle(low=2310.0))
+
+    assert broker._trade_history[-1]["intended_exit"] == 2320.0
+    assert broker._trade_history[-1]["exit"] == 2320.0
+
+
+def test_paper_broker_exit_slippage_worsens_buy_exit() -> None:
     broker = make_paper_engine().broker
     broker.submit_order(make_risk_order(direction="BUY", stop_loss=2320.0))
 
     broker.update_prices(make_candle(low=2310.0))
 
-    assert broker._trade_history[-1]["exit"] == 2320.0
+    trade = broker._trade_history[-1]
+    assert trade["intended_exit"] == 2320.0
+    assert trade["actual_exit"] <= trade["intended_exit"]
+    assert trade["exit_slippage"] >= 0.0
+    assert trade["exit_slippage_cost"] >= 0.0
+    assert trade["total_slippage_cost"] == trade["entry_slippage_cost"] + trade["exit_slippage_cost"]
+
+
+def test_paper_broker_exit_slippage_worsens_sell_exit() -> None:
+    broker = make_paper_engine().broker
+    broker.submit_order(make_risk_order(direction="SELL", stop_loss=2340.0, take_profit=2315.0))
+
+    broker.update_prices(make_candle(high=2341.0, low=2328.0, close=2335.0))
+
+    trade = broker._trade_history[-1]
+    assert trade["intended_exit"] == 2340.0
+    assert trade["actual_exit"] >= trade["intended_exit"]
+    assert trade["exit_slippage"] >= 0.0
+    assert trade["exit_slippage_cost"] >= 0.0
+
+
+def test_paper_broker_deducts_spread_fee_from_equity() -> None:
+    broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0, "paper_spread_pips": 1.5}}).broker
+    broker.submit_order(make_risk_order(direction="BUY", entry_price=2330.0, take_profit=2345.0, lot_size=0.10))
+
+    broker.update_prices(make_candle(high=2346.0))
+
+    trade = broker._trade_history[-1]
+    assert trade["gross_pnl"] == pytest.approx(150.0)
+    assert trade["spread_cost"] == pytest.approx(0.30)
+    assert trade["net_pnl"] == pytest.approx(149.70)
+    assert broker.get_account_state().equity == pytest.approx(10149.70)
+
+
+def test_paper_broker_one_unit_one_pip_pnl_atomic_sanity() -> None:
+    broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0, "paper_spread_pips": 0.0}}).broker
+    order = make_risk_order(
+        direction="BUY",
+        entry_price=2300.00,
+        stop_loss=2299.00,
+        take_profit=2301.00,
+        lot_size=0.01,
+    )
+    order.units = 1.0
+    result = broker.submit_order(order)
+
+    assert result.order_id is not None
+    broker._close_position_at_price(result.order_id, 2300.01, "atomic_unit_test")
+
+    trade = broker._trade_history[-1]
+    assert trade["units"] == pytest.approx(1.0)
+    assert trade["lot_size"] == pytest.approx(0.01)
+    assert trade["gross_pnl"] == pytest.approx(0.01)
+    assert trade["net_pnl"] == pytest.approx(0.01)
+    assert broker.get_account_state().equity == pytest.approx(10000.01)
 
 
 def test_paper_broker_spread_check_at_execution() -> None:

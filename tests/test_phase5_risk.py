@@ -95,6 +95,15 @@ def test_xauusd_one_unit_pnl_matches_oanda_convention() -> None:
     assert spec.pip_value_per_lot == pytest.approx(1.0)
 
 
+def test_xauusd_one_unit_one_pip_pnl_matches_oanda_convention() -> None:
+    spec = InstrumentSpec.from_settings({})
+
+    assert spec.pip_size == pytest.approx(0.01)
+    assert spec.pip_value_per_unit == pytest.approx(0.01)
+    assert spec.pnl("BUY", 2300.00, 2300.01, 1.0) == pytest.approx(0.01)
+    assert spec.pnl("SELL", 2300.00, 2299.99, 1.0) == pytest.approx(0.01)
+
+
 def test_xauusd_risk_sizing_converts_to_oanda_units() -> None:
     order = make_rm().evaluate(make_instruction(entry_price=2330.0, stop_loss=2320.0), make_account(), [])
 
@@ -120,6 +129,16 @@ def test_kelly_computed_from_trade_history() -> None:
 
     assert 0.0 < order.kelly_fraction <= 0.25
     assert order.kelly_fraction == pytest.approx(expected, abs=0.001)
+
+
+def test_kelly_prefers_net_pnl_after_costs() -> None:
+    history = [
+        {"pnl": 10.0, "pnl_after_fees": -1.0, "net_pnl": -1.0, "direction": "BUY", "entry": 1.0, "exit": 2.0}
+    ] * 25
+
+    order = make_rm().evaluate(make_instruction(), make_account(), history)
+
+    assert order.kelly_fraction == 0.0
 
 
 def test_spread_kill_rejects_trade() -> None:

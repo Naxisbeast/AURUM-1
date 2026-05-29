@@ -39,11 +39,15 @@ class PositionRecord:
     open_price: float
     current_price: float
     lot_size: float
+    units: float
     stop_loss: float
     take_profit: float
     open_time: datetime
     unrealised_pnl: float
     broker: str
+    intended_entry_price: float | None = None
+    entry_slippage: float = 0.0
+    entry_slippage_cost: float = 0.0
 
 
 class BrokerBase(ABC):
@@ -98,11 +102,11 @@ class PaperBroker(BrokerBase):
             return _rejected_order_result(order, "spread_too_wide_at_execution", "paper")
 
         instruction = order.instruction
-        slippage_std = float(self.execution_settings.get("slippage_std_pips", 0.5)) * float(
-            self.risk_settings.get("pip_size", 0.01)
-        )
-        slippage = abs(self._rng.gauss(0.0, slippage_std))
-        fill_price = instruction.entry_price + slippage if instruction.direction == "BUY" else instruction.entry_price - slippage
+        units = self._order_units(order)
+        lot_size = self.instrument_spec.units_to_lots(units)
+        slippage = self._sample_slippage_distance()
+        fill_price = self._worsen_entry_price(instruction.direction, instruction.entry_price, slippage)
+        entry_slippage_cost = self._slippage_cost(slippage, units)
         now = datetime.now(UTC)
         position_id = f"paper_{uuid4().hex[:8]}"
         self._positions[position_id] = PositionRecord(
@@ -111,25 +115,38 @@ class PaperBroker(BrokerBase):
             direction=instruction.direction,
             open_price=float(fill_price),
             current_price=float(fill_price),
-            lot_size=float(order.lot_size),
+            lot_size=float(lot_size),
+            units=float(units),
             stop_loss=float(instruction.stop_loss),
             take_profit=float(instruction.take_profit),
             open_time=now,
             unrealised_pnl=0.0,
             broker="paper",
+            intended_entry_price=float(instruction.entry_price),
+            entry_slippage=float(slippage),
+            entry_slippage_cost=float(entry_slippage_cost),
         )
         return OrderResult(
             success=True,
             order_id=position_id,
             fill_price=float(fill_price),
             fill_time=now,
-            lot_size=float(order.lot_size),
+            lot_size=float(lot_size),
             direction=instruction.direction,
             stop_loss=float(instruction.stop_loss),
             take_profit=float(instruction.take_profit),
             rejection_reason=None,
             broker="paper",
-            raw_response={"position_id": position_id, "simulated": True},
+            raw_response={
+                "position_id": position_id,
+                "simulated": True,
+                "intended_entry_price": float(instruction.entry_price),
+                "actual_entry_price": float(fill_price),
+                "entry_slippage": float(slippage),
+                "entry_slippage_cost": float(entry_slippage_cost),
+                "units": float(units),
+                "notional_ounces": float(units * self.instrument_spec.ounces_per_unit),
+            },
         )
 
     def close_position(self, position_id: str, reason: str) -> OrderResult:
@@ -193,20 +210,48 @@ class PaperBroker(BrokerBase):
 
     def _close_position_at_price(self, position_id: str, close_price: float, reason: str) -> OrderResult:
         position = self._positions.pop(position_id)
-        pnl = self._pnl(position, float(close_price))
-        self._balance += pnl
-        self._equity += pnl
-        self._daily_pnl += pnl
+        intended_exit_price = float(close_price)
+        exit_slippage = self._sample_slippage_distance()
+        actual_exit_price = self._worsen_exit_price(position.direction, intended_exit_price, exit_slippage)
+        gross_pnl = self._pnl(position, actual_exit_price)
+        spread_cost = self._spread_cost(position.units)
+        exit_slippage_cost = self._slippage_cost(exit_slippage, position.units)
+        total_slippage_cost = float(position.entry_slippage_cost + exit_slippage_cost)
+        net_pnl = gross_pnl - spread_cost
+        self._balance += net_pnl
+        self._equity += net_pnl
+        self._daily_pnl += net_pnl
         self._peak_equity_30d = max(self._peak_equity_30d, self._equity)
         close_time = datetime.now(UTC)
         self._trade_history.append(
             {
                 "position_id": position_id,
-                "pnl": pnl,
+                "pnl": gross_pnl,
+                "gross_pnl": gross_pnl,
+                "fee": spread_cost,
+                "spread_cost": spread_cost,
+                "pnl_after_fees": net_pnl,
+                "net_pnl": net_pnl,
+                "fee_in_equity": True,
                 "direction": position.direction,
                 "entry": position.open_price,
-                "exit": float(close_price),
+                "actual_entry": position.open_price,
+                "intended_entry": (
+                    float(position.intended_entry_price)
+                    if position.intended_entry_price is not None
+                    else position.open_price
+                ),
+                "entry_slippage": position.entry_slippage,
+                "entry_slippage_cost": position.entry_slippage_cost,
+                "exit": actual_exit_price,
+                "actual_exit": actual_exit_price,
+                "intended_exit": intended_exit_price,
+                "exit_slippage": exit_slippage,
+                "exit_slippage_cost": exit_slippage_cost,
+                "total_slippage_cost": total_slippage_cost,
                 "lot_size": position.lot_size,
+                "units": position.units,
+                "notional_ounces": position.units * self.instrument_spec.ounces_per_unit,
                 "open_time": position.open_time.isoformat(),
                 "reason": reason,
                 "closed_at": close_time.isoformat(),
@@ -215,7 +260,7 @@ class PaperBroker(BrokerBase):
         return OrderResult(
             success=True,
             order_id=position_id,
-            fill_price=float(close_price),
+            fill_price=float(actual_exit_price),
             fill_time=close_time,
             lot_size=position.lot_size,
             direction=position.direction,
@@ -223,12 +268,58 @@ class PaperBroker(BrokerBase):
             take_profit=position.take_profit,
             rejection_reason=None,
             broker="paper",
-            raw_response={"reason": reason, "pnl": pnl, "position_id": position_id},
+            raw_response={
+                "reason": reason,
+                "pnl": gross_pnl,
+                "gross_pnl": gross_pnl,
+                "net_pnl": net_pnl,
+                "fee": spread_cost,
+                "spread_cost": spread_cost,
+                "fee_in_equity": True,
+                "position_id": position_id,
+                "intended_exit_price": intended_exit_price,
+                "actual_exit_price": actual_exit_price,
+                "exit_slippage": exit_slippage,
+                "exit_slippage_cost": exit_slippage_cost,
+                "total_slippage_cost": total_slippage_cost,
+                "units": position.units,
+                "notional_ounces": position.units * self.instrument_spec.ounces_per_unit,
+            },
         )
 
     def _pnl(self, position: PositionRecord, close_price: float) -> float:
-        units = self.instrument_spec.lots_to_units(position.lot_size)
-        return self.instrument_spec.pnl(position.direction, position.open_price, close_price, units)
+        return self.instrument_spec.pnl(position.direction, position.open_price, close_price, position.units)
+
+    def _order_units(self, order: RiskOrder) -> float:
+        if float(order.units) > 0.0:
+            return self.instrument_spec.round_units(float(order.units))
+        return self.instrument_spec.lots_to_units(order.lot_size)
+
+    def _sample_slippage_distance(self) -> float:
+        slippage_std = float(self.execution_settings.get("slippage_std_pips", 0.5)) * float(
+            self.risk_settings.get("pip_size", 0.01)
+        )
+        if slippage_std <= 0.0:
+            return 0.0
+        return abs(self._rng.gauss(0.0, slippage_std))
+
+    @staticmethod
+    def _worsen_entry_price(direction: str, intended_price: float, slippage: float) -> float:
+        if direction == "BUY":
+            return float(intended_price) + float(slippage)
+        return float(intended_price) - float(slippage)
+
+    @staticmethod
+    def _worsen_exit_price(direction: str, intended_price: float, slippage: float) -> float:
+        if direction == "BUY":
+            return float(intended_price) - float(slippage)
+        return float(intended_price) + float(slippage)
+
+    def _slippage_cost(self, price_distance: float, units: float) -> float:
+        return float(price_distance) * float(units) * self.instrument_spec.ounces_per_unit
+
+    def _spread_cost(self, units: float) -> float:
+        return 2.0 * self.get_current_spread_pips(self.instrument) * self.instrument_spec.pip_value_per_unit * float(units)
 
 
 class OandaBroker(BrokerBase):
@@ -342,6 +433,7 @@ class OandaBroker(BrokerBase):
                         open_price=price,
                         current_price=price,
                         lot_size=self.instrument_spec.units_to_lots(units),
+                        units=units,
                         stop_loss=0.0,
                         take_profit=0.0,
                         open_time=datetime.now(UTC),

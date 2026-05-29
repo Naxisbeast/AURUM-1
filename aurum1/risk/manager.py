@@ -110,8 +110,9 @@ class RiskManager:
         if len(trade_history) < int(self._setting("kelly_min_trades", 20)):
             return float(self._setting("kelly_default_fraction", 0.25))
 
-        wins = [float(trade["pnl"]) for trade in trade_history if float(trade.get("pnl", 0.0)) > 0.0]
-        losses = [float(trade["pnl"]) for trade in trade_history if float(trade.get("pnl", 0.0)) <= 0.0]
+        realised = [_realised_trade_pnl(trade) for trade in trade_history]
+        wins = [value for value in realised if value > 0.0]
+        losses = [value for value in realised if value <= 0.0]
         win_rate = len(wins) / len(trade_history)
         avg_win = mean(wins) if wins else 0.0
         avg_loss = abs(mean(losses)) if losses else 1.0
@@ -184,6 +185,14 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _realised_trade_pnl(trade: dict[str, Any]) -> float:
+    if "net_pnl" in trade:
+        return float(trade["net_pnl"])
+    if "pnl_after_fees" in trade:
+        return float(trade["pnl_after_fees"])
+    return float(trade.get("pnl", 0.0))
 
 
 __all__ = ["AccountState", "RiskManager", "RiskOrder"]

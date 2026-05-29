@@ -50,6 +50,16 @@ class BacktestResult:
     largest_loss_pct: float
     avg_trade_duration_bars: int
     total_fees_paid: float
+    total_gross_pnl: float
+    total_net_pnl: float
+    total_spread_cost: float
+    total_entry_slippage_cost: float
+    total_exit_slippage_cost: float
+    total_slippage_cost: float
+    avg_units: float
+    median_units: float
+    min_units: float
+    max_units: float
     total_signals: int
     signals_approved: int
     signals_rejected: int
@@ -287,8 +297,8 @@ def build_backtest_result(
     if not equity_curve:
         equity_curve = [initial_equity]
     net_trades = [_net_trade(trade) for trade in trades]
-    final_equity = float(equity_curve[-1] - sum(trade.get("fee", 0.0) for trade in net_trades))
     adjusted_curve = _fee_adjusted_equity_curve(equity_curve, net_trades)
+    final_equity = float(adjusted_curve[-1])
     drawdown_curve = _drawdown_curve(adjusted_curve)
     total_return_pct = (final_equity / initial_equity - 1.0) if initial_equity else 0.0
     cagr = _cagr(initial_equity, final_equity, start_date, end_date)
@@ -296,13 +306,14 @@ def build_backtest_result(
     sortino = _sortino(adjusted_curve, start_date, end_date)
     max_drawdown = abs(min(drawdown_curve)) if drawdown_curve else 0.0
     calmar = _cap_metric(cagr / max_drawdown if max_drawdown else math.inf)
-    pnl_values = [float(trade.get("pnl_after_fees", trade.get("pnl", 0.0))) for trade in net_trades]
+    pnl_values = [float(trade.get("net_pnl", trade.get("pnl_after_fees", trade.get("pnl", 0.0)))) for trade in net_trades]
     wins = [value for value in pnl_values if value > 0.0]
     losses = [value for value in pnl_values if value <= 0.0]
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
     profit_factor = _cap_metric(gross_profit / gross_loss if gross_loss else math.inf)
     regimes = Counter(str(trade.get("regime", "RANGING")) for trade in net_trades)
+    unit_values = [float(trade.get("units", 0.0)) for trade in net_trades if float(trade.get("units", 0.0)) > 0.0]
     win_rate_by_regime = {
         regime: _win_rate([trade for trade in net_trades if trade.get("regime") == regime])
         for regime in ["TRENDING_UP", "TRENDING_DOWN", "RANGING"]
@@ -310,7 +321,7 @@ def build_backtest_result(
     durations = [int(trade.get("duration_bars", 0)) for trade in net_trades]
     drawdown_values = [abs(value) for value in drawdown_curve if value < 0.0]
     rr_values = [
-        float(trade.get("pnl_after_fees", trade.get("pnl", 0.0))) / float(trade.get("risk_amount", 1.0))
+        float(trade.get("net_pnl", trade.get("pnl_after_fees", trade.get("pnl", 0.0)))) / float(trade.get("risk_amount", 1.0))
         for trade in net_trades
         if float(trade.get("risk_amount", 0.0)) > 0.0
     ]
@@ -340,6 +351,16 @@ def build_backtest_result(
         largest_loss_pct=min([value / initial_equity for value in losses], default=0.0),
         avg_trade_duration_bars=int(round(float(np.mean(durations)))) if durations else 0,
         total_fees_paid=sum(float(trade.get("fee", 0.0)) for trade in net_trades),
+        total_gross_pnl=sum(float(trade.get("gross_pnl", trade.get("pnl", 0.0))) for trade in net_trades),
+        total_net_pnl=sum(float(trade.get("net_pnl", trade.get("pnl_after_fees", trade.get("pnl", 0.0)))) for trade in net_trades),
+        total_spread_cost=sum(float(trade.get("spread_cost", trade.get("fee", 0.0))) for trade in net_trades),
+        total_entry_slippage_cost=sum(float(trade.get("entry_slippage_cost", 0.0)) for trade in net_trades),
+        total_exit_slippage_cost=sum(float(trade.get("exit_slippage_cost", 0.0)) for trade in net_trades),
+        total_slippage_cost=sum(float(trade.get("total_slippage_cost", 0.0)) for trade in net_trades),
+        avg_units=float(np.mean(unit_values)) if unit_values else 0.0,
+        median_units=float(np.median(unit_values)) if unit_values else 0.0,
+        min_units=min(unit_values, default=0.0),
+        max_units=max(unit_values, default=0.0),
         total_signals=total_signals,
         signals_approved=signals_approved,
         signals_rejected=signals_rejected,
@@ -405,21 +426,52 @@ def _augment_trade(trade: dict[str, Any], meta: dict[str, Any], bar_index: int, 
     result["duration_bars"] = max(0, bar_index - int(result.get("open_bar", bar_index)))
     lot_size = float(result.get("lot_size", 0.0))
     instrument = InstrumentSpec.from_settings(settings)
+    if "units" in result:
+        units = float(result["units"])
+    elif lot_size > 0.0:
+        units = float(instrument.lots_to_units(lot_size))
+    else:
+        units = 0.0
+    result["units"] = units
+    result["notional_ounces"] = units * instrument.ounces_per_unit
     fee = (
-        2.0
+        float(result["fee"])
+        if "fee" in result
+        else 2.0
         * float(settings.get("execution", {}).get("paper_spread_pips", 1.5))
-        * instrument.pip_value_per_lot
-        * lot_size
+        * instrument.pip_value_per_unit
+        * units
     )
     result["fee"] = fee
-    result["pnl_after_fees"] = float(result.get("pnl", 0.0)) - fee
+    result["spread_cost"] = float(result.get("spread_cost", fee))
+    result["gross_pnl"] = float(result.get("gross_pnl", result.get("pnl", 0.0)))
+    result["pnl_after_fees"] = float(result.get("pnl_after_fees", result["gross_pnl"] - fee))
+    result["net_pnl"] = float(result.get("net_pnl", result["pnl_after_fees"]))
+    result["entry_slippage_cost"] = float(result.get("entry_slippage_cost", 0.0))
+    result["exit_slippage_cost"] = float(result.get("exit_slippage_cost", 0.0))
+    result["total_slippage_cost"] = float(
+        result.get("total_slippage_cost", result["entry_slippage_cost"] + result["exit_slippage_cost"])
+    )
+    result["fee_in_equity"] = bool(result.get("fee_in_equity", False))
     return result
 
 
 def _net_trade(trade: dict[str, Any]) -> dict[str, Any]:
     result = dict(trade)
     result.setdefault("fee", 0.0)
-    result.setdefault("pnl_after_fees", float(result.get("pnl", 0.0)) - float(result.get("fee", 0.0)))
+    result.setdefault("spread_cost", float(result.get("fee", 0.0)))
+    result.setdefault("gross_pnl", float(result.get("pnl", 0.0)))
+    result.setdefault("units", 0.0)
+    result.setdefault("notional_ounces", float(result.get("units", 0.0)))
+    result.setdefault("pnl_after_fees", float(result.get("gross_pnl", 0.0)) - float(result.get("fee", 0.0)))
+    result.setdefault("net_pnl", float(result.get("pnl_after_fees", result.get("pnl", 0.0))))
+    result.setdefault("entry_slippage_cost", 0.0)
+    result.setdefault("exit_slippage_cost", 0.0)
+    result.setdefault(
+        "total_slippage_cost",
+        float(result.get("entry_slippage_cost", 0.0)) + float(result.get("exit_slippage_cost", 0.0)),
+    )
+    result.setdefault("fee_in_equity", False)
     result.setdefault("regime", "RANGING")
     return result
 
@@ -429,6 +481,8 @@ def _fee_adjusted_equity_curve(equity_curve: list[float], trades: list[dict[str,
     cumulative_fee = 0.0
     trades_by_close = Counter()
     for trade in trades:
+        if bool(trade.get("fee_in_equity", False)):
+            continue
         trades_by_close[int(trade.get("close_bar", len(adjusted) - 1))] += float(trade.get("fee", 0.0))
     for idx in range(len(adjusted)):
         cumulative_fee += trades_by_close[idx]
