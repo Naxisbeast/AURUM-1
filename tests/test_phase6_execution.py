@@ -86,10 +86,15 @@ def make_paper_engine(overrides: dict | None = None) -> ExecutionEngine:
     return engine
 
 
-def make_candle(high: float = 2332.0, low: float = 2326.0, close: float = 2330.0) -> CandleRow:
+def make_candle(
+    high: float = 2332.0,
+    low: float = 2326.0,
+    close: float = 2330.0,
+    open_: float = 2328.0,
+) -> CandleRow:
     return CandleRow(
         timestamp=datetime(2026, 1, 1, 12, 15, tzinfo=UTC),
-        open=2328.0,
+        open=open_,
         high=high,
         low=low,
         close=close,
@@ -202,6 +207,34 @@ def test_paper_broker_exit_slippage_worsens_sell_exit() -> None:
     assert trade["actual_exit"] >= trade["intended_exit"]
     assert trade["exit_slippage"] >= 0.0
     assert trade["exit_slippage_cost"] >= 0.0
+
+
+def test_paper_broker_buy_stop_gap_exits_at_adverse_open() -> None:
+    broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0, "paper_spread_pips": 0.0}}).broker
+    order = make_risk_order(direction="BUY", entry_price=100.0, stop_loss=95.0, take_profit=110.0, lot_size=0.01)
+    order.units = 1.0
+    broker.submit_order(order)
+
+    broker.update_prices(make_candle(open_=90.0, high=93.0, low=89.0, close=91.0))
+
+    trade = broker._trade_history[-1]
+    assert trade["reason"] == "stop_loss_gap"
+    assert trade["intended_exit"] == pytest.approx(90.0)
+    assert trade["gross_pnl"] == pytest.approx(-10.0)
+
+
+def test_paper_broker_sell_stop_gap_exits_at_adverse_open() -> None:
+    broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0, "paper_spread_pips": 0.0}}).broker
+    order = make_risk_order(direction="SELL", entry_price=100.0, stop_loss=105.0, take_profit=90.0, lot_size=0.01)
+    order.units = 1.0
+    broker.submit_order(order)
+
+    broker.update_prices(make_candle(open_=110.0, high=112.0, low=107.0, close=110.0))
+
+    trade = broker._trade_history[-1]
+    assert trade["reason"] == "stop_loss_gap"
+    assert trade["intended_exit"] == pytest.approx(110.0)
+    assert trade["gross_pnl"] == pytest.approx(-10.0)
 
 
 def test_paper_broker_deducts_spread_fee_from_equity() -> None:
