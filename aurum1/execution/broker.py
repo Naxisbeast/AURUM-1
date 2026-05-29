@@ -172,6 +172,9 @@ class PaperBroker(BrokerBase):
         close_queue: list[tuple[str, float, str]] = []
         for position_id, position in list(self._positions.items()):
             if position.direction == "BUY":
+                if candle.open <= position.stop_loss:
+                    close_queue.append((position_id, float(candle.open), "stop_loss_gap"))
+                    continue
                 if candle.low <= position.stop_loss:
                     close_queue.append((position_id, position.stop_loss, "stop_loss"))
                     continue
@@ -179,6 +182,9 @@ class PaperBroker(BrokerBase):
                     close_queue.append((position_id, position.take_profit, "take_profit"))
                     continue
             else:
+                if candle.open >= position.stop_loss:
+                    close_queue.append((position_id, float(candle.open), "stop_loss_gap"))
+                    continue
                 if candle.high >= position.stop_loss:
                     close_queue.append((position_id, position.stop_loss, "stop_loss"))
                     continue

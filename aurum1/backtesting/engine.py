@@ -6,7 +6,7 @@ import copy
 import math
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,8 +19,8 @@ from aurum1.features.engineer import FeatureEngineer, WARMUP_BARS
 from aurum1.instruments import InstrumentSpec
 from aurum1.models.ensemble import SignalResult
 from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
-from aurum1.risk import RiskManager
-from aurum1.signals import CandleRow, MachineMode, StateMachine
+from aurum1.risk import RiskManager, RiskOrder
+from aurum1.signals import CandleRow, MachineMode, StateMachine, TradeInstruction
 
 
 @dataclass
@@ -73,6 +73,14 @@ class BacktestResult:
     trades: list[dict[str, Any]]
 
 
+@dataclass
+class PendingBacktestOrder:
+    order: RiskOrder
+    signal_bar: int
+    signal_time: datetime
+    meta: dict[str, Any]
+
+
 class BacktestEngine:
     """Run AURUM-1 one candle at a time with no future bars visible."""
 
@@ -105,9 +113,11 @@ class BacktestEngine:
         rejection_reasons: Counter[str] = Counter()
         trade_history_cursor = 0
         open_meta: dict[str, dict[str, Any]] = {}
+        pending_orders: list[PendingBacktestOrder] = []
         closed_trades: list[dict[str, Any]] = []
         backtest_log: list[dict[str, Any]] = []
         feature_table = self._build_causal_feature_table(ohlcv, macro, cot, htf_frames)
+        fill_timeout = int(run_settings.get("execution", {}).get("fill_timeout_candles", 3))
 
         for bar_index, (timestamp, _) in enumerate(ohlcv.iterrows()):
             candle = None
@@ -117,8 +127,18 @@ class BacktestEngine:
             new_closed = execution.broker._trade_history[trade_history_cursor:]
             for trade in new_closed:
                 meta = open_meta.pop(str(trade.get("position_id")), {})
-                closed_trades.append(_augment_trade(trade, meta, bar_index, run_settings))
+                closed_trades.append(_augment_trade(trade, meta, bar_index, run_settings, close_timestamp=timestamp))
             trade_history_cursor = len(execution.broker._trade_history)
+            rejected += _process_pending_orders(
+                pending_orders=pending_orders,
+                candle=price_candle,
+                bar_index=bar_index,
+                timestamp=_to_datetime(timestamp),
+                execution=execution,
+                open_meta=open_meta,
+                rejection_reasons=rejection_reasons,
+                fill_timeout_candles=fill_timeout,
+            )
 
             if timestamp in feature_table.index:
                 feature_frame = feature_table.loc[:timestamp]
@@ -136,18 +156,25 @@ class BacktestEngine:
                     )
                     if risk_order.approved:
                         approved += 1
+                        pending_orders.append(
+                            PendingBacktestOrder(
+                                order=risk_order,
+                                signal_bar=bar_index,
+                                signal_time=_to_datetime(timestamp),
+                                meta={
+                                    "regime": instruction.regime,
+                                    "signal_bar": bar_index,
+                                    "signal_time": timestamp.isoformat(),
+                                    "risk_amount": risk_order.risk_amount,
+                                    "signal_score": instruction.signal_score,
+                                    "requested_entry_price": instruction.entry_price,
+                                },
+                            )
+                        )
                     else:
                         rejected += 1
                         rejection_reasons[risk_order.rejection_reason or "unknown"] += 1
-                    result = execution.execute(risk_order)
-                    if result.success and result.order_id:
-                        open_meta[result.order_id] = {
-                            "regime": instruction.regime,
-                            "open_bar": bar_index,
-                            "open_time": timestamp.isoformat(),
-                            "risk_amount": risk_order.risk_amount,
-                            "signal_score": instruction.signal_score,
-                        }
+                        execution.execute(risk_order)
 
             account_state = execution.broker.get_account_state()
             equity_curve.append(float(account_state.equity))
@@ -166,7 +193,9 @@ class BacktestEngine:
             if result.success:
                 trade = execution.broker._trade_history[-1]
                 meta = open_meta.pop(str(trade.get("position_id")), {})
-                closed_trades.append(_augment_trade(trade, meta, len(ohlcv) - 1, run_settings))
+                closed_trades.append(
+                    _augment_trade(trade, meta, len(ohlcv) - 1, run_settings, close_timestamp=final_timestamp)
+                )
         if equity_curve:
             equity_curve[-1] = float(execution.broker.get_account_state().equity)
 
@@ -417,13 +446,97 @@ def _slice_htf_frames(htf_frames: dict[str, pd.DataFrame] | None, timestamp: Any
     return {key: frame.loc[frame.index <= timestamp] for key, frame in htf_frames.items()}
 
 
-def _augment_trade(trade: dict[str, Any], meta: dict[str, Any], bar_index: int, settings: dict[str, Any]) -> dict[str, Any]:
+def _process_pending_orders(
+    *,
+    pending_orders: list[PendingBacktestOrder],
+    candle: CandleRow,
+    bar_index: int,
+    timestamp: datetime,
+    execution: ExecutionEngine,
+    open_meta: dict[str, dict[str, Any]],
+    rejection_reasons: Counter[str],
+    fill_timeout_candles: int,
+) -> int:
+    remaining: list[PendingBacktestOrder] = []
+    rejected = 0
+    for pending in pending_orders:
+        if bar_index <= pending.signal_bar:
+            remaining.append(pending)
+            continue
+        fill_basis = _pending_entry_fill_price(pending.order.instruction, candle)
+        if fill_basis is None:
+            if bar_index - pending.signal_bar >= fill_timeout_candles:
+                rejected += 1
+                rejection_reasons["fill_timeout"] += 1
+            else:
+                remaining.append(pending)
+            continue
+
+        adjusted_instruction = _instruction_for_entry_fill(pending.order.instruction, float(fill_basis))
+        adjusted_order = replace(pending.order, instruction=adjusted_instruction)
+        result = execution.execute(adjusted_order)
+        if result.success and result.order_id:
+            requested_entry = float(pending.order.instruction.entry_price)
+            open_meta[result.order_id] = {
+                **pending.meta,
+                "open_bar": bar_index,
+                "open_time": timestamp.isoformat(),
+                "market_open_time": timestamp.isoformat(),
+                "requested_entry_price": requested_entry,
+                "entry_fill_basis_price": float(fill_basis),
+                "entry_gap_fill": bool(abs(float(fill_basis) - requested_entry) > 1e-12),
+                "actual_entry_price": result.fill_price,
+            }
+        else:
+            rejected += 1
+            rejection_reasons[result.rejection_reason or "unknown"] += 1
+    pending_orders[:] = remaining
+    return rejected
+
+
+def _pending_entry_fill_price(instruction: TradeInstruction, candle: CandleRow) -> float | None:
+    entry = float(instruction.entry_price)
+    if instruction.direction == "BUY":
+        if float(candle.high) < entry:
+            return None
+        return float(candle.open) if float(candle.open) > entry else entry
+    if instruction.direction == "SELL":
+        if float(candle.low) > entry:
+            return None
+        return float(candle.open) if float(candle.open) < entry else entry
+    return None
+
+
+def _instruction_for_entry_fill(instruction: TradeInstruction, fill_price: float) -> TradeInstruction:
+    entry_delta = float(fill_price) - float(instruction.entry_price)
+    return replace(
+        instruction,
+        entry_price=float(fill_price),
+        stop_loss=float(instruction.stop_loss) + entry_delta,
+        take_profit=float(instruction.take_profit) + entry_delta,
+    )
+
+
+def _augment_trade(
+    trade: dict[str, Any],
+    meta: dict[str, Any],
+    bar_index: int,
+    settings: dict[str, Any],
+    *,
+    close_timestamp: Any | None = None,
+) -> dict[str, Any]:
     result = dict(trade)
     result.update(meta)
     result.setdefault("regime", meta.get("regime", "RANGING"))
     result.setdefault("open_bar", meta.get("open_bar", bar_index))
     result["close_bar"] = bar_index
     result["duration_bars"] = max(0, bar_index - int(result.get("open_bar", bar_index)))
+    if close_timestamp is not None:
+        market_close_time = _to_datetime(close_timestamp).isoformat()
+        result["market_close_time"] = market_close_time
+        result["closed_at"] = market_close_time
+    if "market_open_time" not in result and result.get("open_time") is not None:
+        result["market_open_time"] = str(result["open_time"])
     lot_size = float(result.get("lot_size", 0.0))
     instrument = InstrumentSpec.from_settings(settings)
     if "units" in result:

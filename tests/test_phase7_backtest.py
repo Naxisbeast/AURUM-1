@@ -18,7 +18,7 @@ from aurum1.backtesting import (
     run_ablation_backtest,
     run_monte_carlo,
 )
-from aurum1.backtesting.engine import build_backtest_result
+from aurum1.backtesting.engine import _instruction_for_entry_fill, _pending_entry_fill_price, build_backtest_result
 from aurum1.backtesting.report import plot_equity_curve, print_backtest_report
 from aurum1.data.ingestion import initialize_database
 from aurum1.execution import PaperBroker
@@ -233,6 +233,123 @@ def test_backtest_report_separates_gross_net_and_costs(capsys: pytest.CaptureFix
     assert "Net P&L:" in output
 
 
+def test_pending_buy_stop_fills_at_open_when_gapped_above_entry() -> None:
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="BUY",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_UP",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+    candle = CandleRow(
+        timestamp=pd.Timestamp("2026-01-01T00:15:00Z").to_pydatetime(),
+        open=103.0,
+        high=105.0,
+        low=102.0,
+        close=104.0,
+        volume=1.0,
+        atr_14=2.0,
+        adx_14=30.0,
+        ema_9=101.0,
+        ema_20=100.0,
+        session_london=1,
+        session_ny=0,
+        session_overlap=0,
+    )
+
+    assert _pending_entry_fill_price(instruction, candle) == pytest.approx(103.0)
+
+
+def test_pending_sell_stop_fills_at_open_when_gapped_below_entry() -> None:
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="SELL",
+        entry_price=100.0,
+        stop_loss=105.0,
+        take_profit=90.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_DOWN",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+    candle = CandleRow(
+        timestamp=pd.Timestamp("2026-01-01T00:15:00Z").to_pydatetime(),
+        open=97.0,
+        high=98.0,
+        low=95.0,
+        close=96.0,
+        volume=1.0,
+        atr_14=2.0,
+        adx_14=30.0,
+        ema_9=99.0,
+        ema_20=100.0,
+        session_london=1,
+        session_ny=0,
+        session_overlap=0,
+    )
+
+    assert _pending_entry_fill_price(instruction, candle) == pytest.approx(97.0)
+
+
+def test_pending_entry_does_not_fill_if_candle_never_touches_stop() -> None:
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="BUY",
+        entry_price=100.0,
+        stop_loss=95.0,
+        take_profit=110.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_UP",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+    candle = CandleRow(
+        timestamp=pd.Timestamp("2026-01-01T00:15:00Z").to_pydatetime(),
+        open=96.0,
+        high=99.0,
+        low=95.0,
+        close=98.0,
+        volume=1.0,
+        atr_14=2.0,
+        adx_14=30.0,
+        ema_9=101.0,
+        ema_20=100.0,
+        session_london=1,
+        session_ny=0,
+        session_overlap=0,
+    )
+
+    assert _pending_entry_fill_price(instruction, candle) is None
+
+
+def test_gap_fill_shifts_stop_and_target_to_actual_fill() -> None:
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="SELL",
+        entry_price=100.0,
+        stop_loss=105.0,
+        take_profit=90.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_DOWN",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+
+    adjusted = _instruction_for_entry_fill(instruction, 97.0)
+
+    assert adjusted.entry_price == pytest.approx(97.0)
+    assert adjusted.stop_loss == pytest.approx(102.0)
+    assert adjusted.take_profit == pytest.approx(87.0)
+
+
 def test_backtest_sharpe_formula() -> None:
     curve = [10000.0 * (1.001**idx) for idx in range(252)]
     result = build_backtest_result(
@@ -418,6 +535,28 @@ def test_backtest_no_same_candle_exit_after_entry() -> None:
     result = BacktestEngine(settings()).run(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv))
 
     assert all(int(trade.get("duration_bars", 0)) >= 1 for trade in result.trades)
+
+
+def test_backtest_entries_are_executable_on_market_open_candle() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(settings()).run(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv))
+
+    for trade in result.trades:
+        open_bar = int(trade["open_bar"])
+        candle = ohlcv.iloc[open_bar]
+        fill_basis = float(trade["entry_fill_basis_price"])
+        assert float(candle["low"]) <= fill_basis <= float(candle["high"])
+        assert float(trade["entry"]) == pytest.approx(fill_basis)
+        assert trade["open_time"] == ohlcv.index[open_bar].isoformat()
+        assert trade["market_open_time"] == ohlcv.index[open_bar].isoformat()
+
+
+def test_backtest_trade_closed_at_uses_market_close_time() -> None:
+    result = run_synthetic_backtest()
+
+    for trade in result.trades:
+        assert trade["closed_at"] == trade["market_close_time"]
+        assert "T" in trade["market_close_time"]
 
 
 def test_same_candle_sl_tp_assumes_stop_first() -> None:
