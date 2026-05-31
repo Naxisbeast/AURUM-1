@@ -17,7 +17,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from aurum1.backtesting import BacktestEngine, WalkForwardValidator, run_ablation_backtest, run_monte_carlo
+from aurum1.backtesting import (
+    RULE_REGIME_BUY_NEXT_OPEN,
+    BacktestEngine,
+    WalkForwardValidator,
+    rule_regime_buy_next_open_settings,
+    run_ablation_backtest,
+    run_monte_carlo,
+)
 from aurum1.backtesting.report import plot_equity_curve, print_backtest_report, save_backtest_report
 from aurum1.data.ingestion import (
     DEFAULT_OANDA_BACKTEST_COUNT,
@@ -80,9 +87,23 @@ def main(argv: list[str] | None = None) -> int:
         mode=MachineMode.RULE_REGIME,
         initial_equity=float(settings.get("broker", {}).get("paper_initial_equity", 10000.0)),
     )
+    variant_settings = rule_regime_buy_next_open_settings(settings)
+    variant_walk_forward = WalkForwardValidator(variant_settings).run(
+        ohlcv,
+        macro,
+        cot,
+        mode=MachineMode.RULE_REGIME,
+        initial_equity=float(settings.get("broker", {}).get("paper_initial_equity", 10000.0)),
+    )
     combined_trades = [trade for window in walk_forward.windows for trade in window.trades]
+    variant_combined_trades = [trade for window in variant_walk_forward.windows for trade in window.trades]
     monte_carlo = run_monte_carlo(
         combined_trades,
+        n_simulations=int(settings.get("backtesting", {}).get("n_monte_carlo", 1000)),
+        initial_equity=float(settings.get("broker", {}).get("paper_initial_equity", 10000.0)),
+    )
+    variant_monte_carlo = run_monte_carlo(
+        variant_combined_trades,
         n_simulations=int(settings.get("backtesting", {}).get("n_monte_carlo", 1000)),
         initial_equity=float(settings.get("broker", {}).get("paper_initial_equity", 10000.0)),
     )
@@ -100,19 +121,22 @@ def main(argv: list[str] | None = None) -> int:
         save_backtest_report(result, reports_dir / f"backtest_{mode_name}.json")
         plot_equity_curve(result, reports_dir / f"equity_{mode_name}.png")
     print_mode_diagnostics(ablation)
+    print_research_variant_comparison(ablation, walk_forward, variant_walk_forward)
 
     best_mode, best_result = max(ablation.items(), key=lambda item: item[1].sharpe_ratio)
-    recommendation = (
-        "quantitative gate passed; eligible for supervised internal paper candidate review, not auto-started"
-        if walk_forward.promotion_gate_passed and monte_carlo.ruin_probability < 0.05
-        else "review risk params"
-    )
+    variant_result = ablation.get(RULE_REGIME_BUY_NEXT_OPEN)
+    recommendation = "strategy research required; no paper trading approval"
     if history_status["short_history"]:
         recommendation = "short-history plumbing run; quantitative readiness not verified"
-    if walk_forward.mean_sharpe <= 0.0 or walk_forward.mean_profit_factor < 1.0:
-        recommendation = "retrain models"
+    elif (
+        variant_result is not None
+        and variant_result.total_net_pnl > 0.0
+        and variant_walk_forward.promotion_gate_passed
+        and variant_monte_carlo.ruin_probability < 0.05
+    ):
+        recommendation = "research candidate only; benchmark and cost-stress validation still required before paper review"
 
-    print("\nWalk-forward summary:")
+    print("\nWalk-forward summary (baseline rule_regime):")
     print(f"  Windows: {len(walk_forward.windows)}")
     print(f"  Mean Sharpe: {walk_forward.mean_sharpe:.2f}")
     print(f"  Mean Profit Factor: {walk_forward.mean_profit_factor:.2f}")
@@ -120,19 +144,40 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mean Max Drawdown: {walk_forward.mean_max_drawdown:.2%}")
     print_promotion_gate(walk_forward)
     print_walk_forward_detail(walk_forward.windows)
-    print("\nMonte Carlo summary:")
+    print("\nWalk-forward summary (variant rule_regime_buy_next_open):")
+    print(f"  Windows: {len(variant_walk_forward.windows)}")
+    print(f"  Mean Sharpe: {variant_walk_forward.mean_sharpe:.2f}")
+    print(f"  Mean Profit Factor: {variant_walk_forward.mean_profit_factor:.2f}")
+    print(f"  Mean Win Rate: {variant_walk_forward.mean_win_rate:.2%}")
+    print(f"  Mean Max Drawdown: {variant_walk_forward.mean_max_drawdown:.2%}")
+    print_promotion_gate(variant_walk_forward)
+    print_walk_forward_detail(variant_walk_forward.windows)
+    print("\nMonte Carlo summary (baseline rule_regime walk-forward trades):")
     print(f"  Median final equity: {monte_carlo.median_final_equity:.2f}")
     print(f"  5th percentile final equity: {monte_carlo.pct5_final_equity:.2f}")
     print(f"  95th percentile drawdown: {monte_carlo.pct95_max_drawdown:.2%}")
     print(f"  Ruin probability: {monte_carlo.ruin_probability:.2%}")
+    print("\nMonte Carlo summary (variant rule_regime_buy_next_open walk-forward trades):")
+    print(f"  Median final equity: {variant_monte_carlo.median_final_equity:.2f}")
+    print(f"  5th percentile final equity: {variant_monte_carlo.pct5_final_equity:.2f}")
+    print(f"  95th percentile drawdown: {variant_monte_carlo.pct95_max_drawdown:.2%}")
+    print(f"  Ruin probability: {variant_monte_carlo.ruin_probability:.2%}")
     print("\nFinal summary:")
     print(f"  Best mode by Sharpe: {best_mode} ({best_result.sharpe_ratio:.2f})")
     print(
-        "  Promotion gate: "
+        "  Baseline promotion gate: "
         f"{'PASSED' if walk_forward.promotion_gate_passed else 'FAILED'} "
         f"({walk_forward.criteria_passed}/6 criteria met)"
     )
-    print(f"  Monte Carlo ruin probability: {monte_carlo.ruin_probability:.2%}")
+    print(
+        "  Variant promotion gate: "
+        f"{'PASSED' if variant_walk_forward.promotion_gate_passed else 'FAILED'} "
+        f"({variant_walk_forward.criteria_passed}/6 criteria met)"
+    )
+    print(f"  Baseline Monte Carlo ruin probability: {monte_carlo.ruin_probability:.2%}")
+    print(f"  Variant Monte Carlo ruin probability: {variant_monte_carlo.ruin_probability:.2%}")
+    print("  Paper readiness: FAILED")
+    print("  Live readiness: FAILED")
     print(f"  Recommendation: {recommendation}")
     return 0
 
@@ -284,6 +329,58 @@ def print_walk_forward_detail(windows: list[Any]) -> None:
     print(f"  Negative Sharpe windows: {negative}/{len(windows)}")
 
 
+def print_research_variant_comparison(
+    ablation: dict[str, Any],
+    baseline_walk_forward: Any,
+    variant_walk_forward: Any,
+) -> None:
+    baseline = ablation.get(MachineMode.RULE_REGIME.value)
+    variant = ablation.get(RULE_REGIME_BUY_NEXT_OPEN)
+    if baseline is None or variant is None:
+        return
+
+    baseline_positive = sum(1 for window in baseline_walk_forward.windows if window.sharpe_ratio > 0.0)
+    variant_positive = sum(1 for window in variant_walk_forward.windows if window.sharpe_ratio > 0.0)
+    print("\nResearch variant comparison:")
+    print("  Baseline: rule_regime")
+    print(f"  Variant:  {RULE_REGIME_BUY_NEXT_OPEN}")
+    print(
+        "  "
+        f"{'metric':<28}"
+        f"{'rule_regime':>18}"
+        f"{RULE_REGIME_BUY_NEXT_OPEN:>32}"
+    )
+    print("  " + "-" * 78)
+    rows = [
+        ("trade count", f"{baseline.total_trades}", f"{variant.total_trades}"),
+        ("win rate", f"{baseline.win_rate:.2%}", f"{variant.win_rate:.2%}"),
+        ("profit factor", f"{baseline.profit_factor:.2f}", f"{variant.profit_factor:.2f}"),
+        ("expectancy R", f"{_expectancy_r(baseline.trades):.3f}", f"{_expectancy_r(variant.trades):.3f}"),
+        ("average R", f"{_average_r(baseline.trades):.3f}", f"{_average_r(variant.trades):.3f}"),
+        ("median R", f"{_median_r(baseline.trades):.3f}", f"{_median_r(variant.trades):.3f}"),
+        ("capital-weighted R", f"{_capital_weighted_r(baseline.trades):.3f}", f"{_capital_weighted_r(variant.trades):.3f}"),
+        ("max drawdown", f"{baseline.max_drawdown_pct:.2%}", f"{variant.max_drawdown_pct:.2%}"),
+        ("Sharpe", f"{baseline.sharpe_ratio:.2f}", f"{variant.sharpe_ratio:.2f}"),
+        ("Sortino", f"{baseline.sortino_ratio:.2f}", f"{variant.sortino_ratio:.2f}"),
+        ("total spread cost", f"${baseline.total_spread_cost:.2f}", f"${variant.total_spread_cost:.2f}"),
+        ("total slippage cost", f"${baseline.total_slippage_cost:.2f}", f"${variant.total_slippage_cost:.2f}"),
+        ("avg holding bars", f"{baseline.avg_trade_duration_bars}", f"{variant.avg_trade_duration_bars}"),
+        (
+            "WF positive windows",
+            f"{baseline_positive}/{len(baseline_walk_forward.windows)}",
+            f"{variant_positive}/{len(variant_walk_forward.windows)}",
+        ),
+    ]
+    for label, baseline_value, variant_value in rows:
+        print(f"  {label:<28}{baseline_value:>18}{variant_value:>32}")
+    print("  exit reason distribution:")
+    print(f"    rule_regime:                  {_exit_reason_distribution(baseline.trades)}")
+    print(f"    {RULE_REGIME_BUY_NEXT_OPEN}:   {_exit_reason_distribution(variant.trades)}")
+    print("  fill type distribution:")
+    print(f"    rule_regime:                  {_fill_type_distribution(baseline.trades)}")
+    print(f"    {RULE_REGIME_BUY_NEXT_OPEN}:   {_fill_type_distribution(variant.trades)}")
+
+
 def print_mode_diagnostics(ablation: dict[str, Any]) -> None:
     baseline = ablation.get(MachineMode.RULE_ONLY.value)
     if baseline is None:
@@ -334,6 +431,59 @@ def _trade_exit_keys(trades: list[dict[str, Any]]) -> set[tuple[str, str, float]
         )
         for trade in trades
     }
+
+
+def _r_values(trades: list[dict[str, Any]]) -> list[float]:
+    return [
+        float(trade.get("net_pnl", trade.get("pnl_after_fees", trade.get("pnl", 0.0)))) / float(trade["risk_amount"])
+        for trade in trades
+        if float(trade.get("risk_amount", 0.0)) > 0.0
+    ]
+
+
+def _average_r(trades: list[dict[str, Any]]) -> float:
+    values = _r_values(trades)
+    return float(np.mean(values)) if values else 0.0
+
+
+def _expectancy_r(trades: list[dict[str, Any]]) -> float:
+    values = _r_values(trades)
+    if not values:
+        return 0.0
+    wins = [value for value in values if value > 0.0]
+    losses = [value for value in values if value <= 0.0]
+    win_rate = len(wins) / len(values)
+    loss_rate = len(losses) / len(values)
+    avg_win = float(np.mean(wins)) if wins else 0.0
+    avg_loss = float(np.mean(losses)) if losses else 0.0
+    return win_rate * avg_win + loss_rate * avg_loss
+
+
+def _median_r(trades: list[dict[str, Any]]) -> float:
+    values = _r_values(trades)
+    return float(np.median(values)) if values else 0.0
+
+
+def _capital_weighted_r(trades: list[dict[str, Any]]) -> float:
+    total_risk = sum(float(trade.get("risk_amount", 0.0)) for trade in trades)
+    total_net = sum(float(trade.get("net_pnl", trade.get("pnl_after_fees", trade.get("pnl", 0.0)))) for trade in trades)
+    return total_net / total_risk if total_risk > 0.0 else 0.0
+
+
+def _exit_reason_distribution(trades: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        reason = str(trade.get("reason", "unknown"))
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _fill_type_distribution(trades: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for trade in trades:
+        fill_type = str(trade.get("fill_type", "unknown"))
+        counts[fill_type] = counts.get(fill_type, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def load_backtest_ohlcv(

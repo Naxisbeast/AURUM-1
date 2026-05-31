@@ -81,6 +81,14 @@ class PendingBacktestOrder:
     meta: dict[str, Any]
 
 
+@dataclass
+class PendingNextOpenInstruction:
+    instruction: TradeInstruction
+    signal_bar: int
+    signal_time: datetime
+    meta: dict[str, Any]
+
+
 class BacktestEngine:
     """Run AURUM-1 one candle at a time with no future bars visible."""
 
@@ -114,10 +122,16 @@ class BacktestEngine:
         trade_history_cursor = 0
         open_meta: dict[str, dict[str, Any]] = {}
         pending_orders: list[PendingBacktestOrder] = []
+        next_open_orders: list[PendingNextOpenInstruction] = []
         closed_trades: list[dict[str, Any]] = []
         backtest_log: list[dict[str, Any]] = []
         feature_table = self._build_causal_feature_table(ohlcv, macro, cot, htf_frames)
         fill_timeout = int(run_settings.get("execution", {}).get("fill_timeout_candles", 3))
+        entry_type = str(run_settings.get("backtesting", {}).get("entry_type", "pending_stop"))
+        direction_filter = {
+            str(direction).upper()
+            for direction in run_settings.get("backtesting", {}).get("direction_filter", [])
+        }
 
         for bar_index, (timestamp, _) in enumerate(ohlcv.iterrows()):
             candle = None
@@ -139,6 +153,19 @@ class BacktestEngine:
                 rejection_reasons=rejection_reasons,
                 fill_timeout_candles=fill_timeout,
             )
+            next_open_approved, next_open_rejected = _process_next_open_orders(
+                next_open_orders=next_open_orders,
+                candle=price_candle,
+                bar_index=bar_index,
+                timestamp=_to_datetime(timestamp),
+                execution=execution,
+                risk_manager=risk_manager,
+                open_meta=open_meta,
+                rejection_reasons=rejection_reasons,
+                settings=run_settings,
+            )
+            approved += next_open_approved
+            rejected += next_open_rejected
 
             if timestamp in feature_table.index:
                 feature_frame = feature_table.loc[:timestamp]
@@ -148,33 +175,38 @@ class BacktestEngine:
                 instruction = state_machine.on_candle(candle, signal, is_blackout=False)
                 if instruction is not None:
                     signals += 1
-                    account = execution.broker.get_account_state()
-                    risk_order = risk_manager.evaluate(
-                        instruction,
-                        account,
-                        list(execution.broker._trade_history),  # Paper broker trade history for Kelly.
-                    )
-                    if risk_order.approved:
-                        approved += 1
-                        pending_orders.append(
-                            PendingBacktestOrder(
-                                order=risk_order,
+                    if direction_filter and instruction.direction.upper() not in direction_filter:
+                        rejected += 1
+                        rejection_reasons[f"{entry_type}_{instruction.direction.lower()}_skipped"] += 1
+                    elif entry_type == "next_open":
+                        next_open_orders.append(
+                            PendingNextOpenInstruction(
+                                instruction=instruction,
                                 signal_bar=bar_index,
                                 signal_time=_to_datetime(timestamp),
-                                meta={
-                                    "regime": instruction.regime,
-                                    "signal_bar": bar_index,
-                                    "signal_time": timestamp.isoformat(),
-                                    "risk_amount": risk_order.risk_amount,
-                                    "signal_score": instruction.signal_score,
-                                    "requested_entry_price": instruction.entry_price,
-                                },
+                                meta=_signal_meta(instruction, bar_index, timestamp),
                             )
                         )
                     else:
-                        rejected += 1
-                        rejection_reasons[risk_order.rejection_reason or "unknown"] += 1
-                        execution.execute(risk_order)
+                        account = execution.broker.get_account_state()
+                        risk_order = risk_manager.evaluate(
+                            instruction,
+                            account,
+                            list(execution.broker._trade_history),  # Paper broker trade history for Kelly.
+                        )
+                        if risk_order.approved:
+                            approved += 1
+                            backtest_order = PendingBacktestOrder(
+                                order=risk_order,
+                                signal_bar=bar_index,
+                                signal_time=_to_datetime(timestamp),
+                                meta=_order_meta(instruction, risk_order, bar_index, timestamp),
+                            )
+                            pending_orders.append(backtest_order)
+                        else:
+                            rejected += 1
+                            rejection_reasons[risk_order.rejection_reason or "unknown"] += 1
+                            execution.execute(risk_order)
 
             account_state = execution.broker.get_account_state()
             equity_curve.append(float(account_state.equity))
@@ -186,6 +218,10 @@ class BacktestEngine:
                     "signal": signal.direction if signal else "NONE",
                 }
             )
+
+        if next_open_orders:
+            rejected += len(next_open_orders)
+            rejection_reasons["next_open_no_next_candle"] += len(next_open_orders)
 
         final_timestamp = ohlcv.index[-1] if len(ohlcv) else datetime.now(UTC)
         for position in list(execution.broker.get_open_positions()):
@@ -205,7 +241,7 @@ class BacktestEngine:
             start_date=_to_datetime(ohlcv.index[0]) if len(ohlcv) else datetime.now(UTC),
             end_date=_to_datetime(final_timestamp) if len(ohlcv) else datetime.now(UTC),
             instrument=str(ohlcv.get("instrument", pd.Series(["XAU_USD"])).iloc[0]) if len(ohlcv) else "XAU_USD",
-            mode=mode.value,
+            mode=str(run_settings.get("backtesting", {}).get("result_mode_name", mode.value)),
             initial_equity=initial_equity,
             total_bars=len(ohlcv),
             total_signals=signals,
@@ -258,7 +294,8 @@ class BacktestEngine:
         timestamp: Any,
         mode: MachineMode,
     ) -> SignalResult:
-        if self.regime_classifier is not None and self.regime_classifier.model is not None:
+        disable_ml = bool(self.settings.get("backtesting", {}).get("disable_ml", False))
+        if not disable_ml and self.regime_classifier is not None and self.regime_classifier.model is not None:
             proba = self.regime_classifier.predict_proba(feature_frame.tail(1))[0]
             regime_class = int(np.argmax(proba))
             confidence = float(proba[regime_class])
@@ -477,6 +514,7 @@ def _process_pending_orders(
         result = execution.execute(adjusted_order)
         if result.success and result.order_id:
             requested_entry = float(pending.order.instruction.entry_price)
+            is_gap_fill = bool(abs(float(fill_basis) - requested_entry) > 1e-12)
             open_meta[result.order_id] = {
                 **pending.meta,
                 "open_bar": bar_index,
@@ -484,14 +522,80 @@ def _process_pending_orders(
                 "market_open_time": timestamp.isoformat(),
                 "requested_entry_price": requested_entry,
                 "entry_fill_basis_price": float(fill_basis),
-                "entry_gap_fill": bool(abs(float(fill_basis) - requested_entry) > 1e-12),
+                "entry_gap_fill": is_gap_fill,
+                "fill_type": "gap_fill" if is_gap_fill else "pending_stop",
                 "actual_entry_price": result.fill_price,
+                "stop_loss": adjusted_instruction.stop_loss,
+                "take_profit": adjusted_instruction.take_profit,
+                "atr_at_entry": adjusted_instruction.atr_at_entry,
             }
         else:
             rejected += 1
             rejection_reasons[result.rejection_reason or "unknown"] += 1
     pending_orders[:] = remaining
     return rejected
+
+
+def _process_next_open_orders(
+    *,
+    next_open_orders: list[PendingNextOpenInstruction],
+    candle: CandleRow,
+    bar_index: int,
+    timestamp: datetime,
+    execution: ExecutionEngine,
+    risk_manager: RiskManager,
+    open_meta: dict[str, dict[str, Any]],
+    rejection_reasons: Counter[str],
+    settings: dict[str, Any],
+) -> tuple[int, int]:
+    remaining: list[PendingNextOpenInstruction] = []
+    approved = 0
+    rejected = 0
+    for pending in next_open_orders:
+        if bar_index <= pending.signal_bar:
+            remaining.append(pending)
+            continue
+
+        fill_basis = float(candle.open)
+        adjusted_instruction = _instruction_for_next_open_fill(
+            pending.instruction,
+            fill_basis,
+            settings,
+        )
+        account = execution.broker.get_account_state()
+        risk_order = risk_manager.evaluate(
+            adjusted_instruction,
+            account,
+            list(execution.broker._trade_history),
+        )
+        if not risk_order.approved:
+            rejected += 1
+            rejection_reasons[risk_order.rejection_reason or "unknown"] += 1
+            execution.execute(risk_order)
+            continue
+        approved += 1
+        result = execution.execute(risk_order)
+        if result.success and result.order_id:
+            open_meta[result.order_id] = {
+                **pending.meta,
+                "risk_amount": risk_order.risk_amount,
+                "open_bar": bar_index,
+                "open_time": timestamp.isoformat(),
+                "market_open_time": timestamp.isoformat(),
+                "requested_entry_price": float(pending.instruction.entry_price),
+                "entry_fill_basis_price": fill_basis,
+                "entry_gap_fill": False,
+                "fill_type": "next_open",
+                "actual_entry_price": result.fill_price,
+                "stop_loss": adjusted_instruction.stop_loss,
+                "take_profit": adjusted_instruction.take_profit,
+                "atr_at_entry": adjusted_instruction.atr_at_entry,
+            }
+        else:
+            rejected += 1
+            rejection_reasons[result.rejection_reason or "unknown"] += 1
+    next_open_orders[:] = remaining
+    return approved, rejected
 
 
 def _pending_entry_fill_price(instruction: TradeInstruction, candle: CandleRow) -> float | None:
@@ -515,6 +619,58 @@ def _instruction_for_entry_fill(instruction: TradeInstruction, fill_price: float
         stop_loss=float(instruction.stop_loss) + entry_delta,
         take_profit=float(instruction.take_profit) + entry_delta,
     )
+
+
+def _instruction_for_next_open_fill(
+    instruction: TradeInstruction,
+    fill_price: float,
+    settings: dict[str, Any],
+) -> TradeInstruction:
+    signal_settings = settings.get("signals", {})
+    sl_mult = float(signal_settings.get("atr_sl_multiplier", 2.0))
+    tp_mult = float(signal_settings.get("atr_tp_multiplier", 3.0))
+    atr = float(instruction.atr_at_entry)
+    if instruction.direction == "BUY":
+        stop_loss = float(fill_price) - sl_mult * atr
+        take_profit = float(fill_price) + tp_mult * atr
+    else:
+        stop_loss = float(fill_price) + sl_mult * atr
+        take_profit = float(fill_price) - tp_mult * atr
+    return replace(
+        instruction,
+        entry_price=float(fill_price),
+        stop_loss=float(stop_loss),
+        take_profit=float(take_profit),
+    )
+
+
+def _order_meta(
+    instruction: TradeInstruction,
+    risk_order: RiskOrder,
+    bar_index: int,
+    timestamp: Any,
+) -> dict[str, Any]:
+    return {
+        **_signal_meta(instruction, bar_index, timestamp),
+        "risk_amount": risk_order.risk_amount,
+    }
+
+
+def _signal_meta(
+    instruction: TradeInstruction,
+    bar_index: int,
+    timestamp: Any,
+) -> dict[str, Any]:
+    return {
+        "regime": instruction.regime,
+        "signal_bar": bar_index,
+        "signal_time": timestamp.isoformat(),
+        "signal_score": instruction.signal_score,
+        "requested_entry_price": instruction.entry_price,
+        "atr_at_entry": instruction.atr_at_entry,
+        "stop_loss": instruction.stop_loss,
+        "take_profit": instruction.take_profit,
+    }
 
 
 def _augment_trade(
@@ -566,6 +722,7 @@ def _augment_trade(
         result.get("total_slippage_cost", result["entry_slippage_cost"] + result["exit_slippage_cost"])
     )
     result["fee_in_equity"] = bool(result.get("fee_in_equity", False))
+    result.setdefault("fill_type", "unknown")
     return result
 
 
@@ -586,6 +743,7 @@ def _net_trade(trade: dict[str, Any]) -> dict[str, Any]:
     )
     result.setdefault("fee_in_equity", False)
     result.setdefault("regime", "RANGING")
+    result.setdefault("fill_type", "unknown")
     return result
 
 

@@ -61,23 +61,25 @@ class WalkForwardValidator:
             train = ohlcv.iloc[start : start + train_bars]
             test = ohlcv.iloc[start + train_bars : start + train_bars + test_bars]
             engine = BacktestEngine(self._window_settings())
-            try:
-                train_features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
-                    train,
-                    macro,
-                    cot,
-                    include_target=True,
-                )
-                if len(train_features) >= 20:
-                    classifier = RegimeClassifier(engine.settings)
-                    classifier.train(train_features, update_latest=False)
-                    engine.regime_classifier = classifier
-                    if "label" in train_features.columns and len(train_features) >= 80:
-                        predictor = DirectionPredictor(engine.settings)
-                        predictor.train(train_features, update_latest=False)
-                        engine.direction_predictor = predictor
-            except Exception:
-                pass
+            disable_ml = bool(engine.settings.get("backtesting", {}).get("disable_ml", False))
+            if not disable_ml:
+                try:
+                    train_features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
+                        train,
+                        macro,
+                        cot,
+                        include_target=True,
+                    )
+                    if len(train_features) >= 20:
+                        classifier = RegimeClassifier(engine.settings)
+                        classifier.train(train_features, update_latest=False)
+                        engine.regime_classifier = classifier
+                        if "label" in train_features.columns and len(train_features) >= 80:
+                            predictor = DirectionPredictor(engine.settings)
+                            predictor.train(train_features, update_latest=False)
+                            engine.direction_predictor = predictor
+                except Exception:
+                    pass
             windows.append(engine.run(test, macro, cot, htf_frames=htf_frames, mode=mode, initial_equity=initial_equity))
             start += step_bars
         return _aggregate_windows(windows)
