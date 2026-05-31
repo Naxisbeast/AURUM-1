@@ -12,13 +12,20 @@ import pandas as pd
 import pytest
 
 from aurum1.backtesting import (
+    RULE_REGIME_BUY_NEXT_OPEN,
     BacktestEngine,
     BacktestResult,
     WalkForwardValidator,
+    rule_regime_buy_next_open_settings,
     run_ablation_backtest,
     run_monte_carlo,
 )
-from aurum1.backtesting.engine import _instruction_for_entry_fill, _pending_entry_fill_price, build_backtest_result
+from aurum1.backtesting.engine import (
+    _instruction_for_entry_fill,
+    _instruction_for_next_open_fill,
+    _pending_entry_fill_price,
+    build_backtest_result,
+)
 from aurum1.backtesting.report import plot_equity_curve, print_backtest_report
 from aurum1.data.ingestion import initialize_database
 from aurum1.execution import PaperBroker
@@ -350,6 +357,121 @@ def test_gap_fill_shifts_stop_and_target_to_actual_fill() -> None:
     assert adjusted.take_profit == pytest.approx(87.0)
 
 
+def test_next_open_fill_rebuilds_atr_bracket_around_actual_entry() -> None:
+    instruction = TradeInstruction(
+        timestamp=pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime(),
+        direction="BUY",
+        entry_price=100.0,
+        stop_loss=96.0,
+        take_profit=106.0,
+        atr_at_entry=2.0,
+        signal_score=0.8,
+        regime="TRENDING_UP",
+        confidence=0.9,
+        machine_mode="rule_regime",
+    )
+
+    adjusted = _instruction_for_next_open_fill(instruction, 103.0, settings())
+
+    assert adjusted.entry_price == pytest.approx(103.0)
+    assert adjusted.stop_loss == pytest.approx(99.0)
+    assert adjusted.take_profit == pytest.approx(109.0)
+
+
+def test_buy_signal_enters_at_next_candle_open_in_next_open_variant() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(rule_regime_buy_next_open_settings(settings())).run(
+        ohlcv,
+        synthetic_macro(ohlcv),
+        synthetic_cot(ohlcv),
+        mode=MachineMode.RULE_REGIME,
+    )
+
+    assert result.total_trades >= 1
+    for trade in result.trades:
+        open_bar = int(trade["open_bar"])
+        signal_bar = int(trade["signal_bar"])
+        expected_open = float(ohlcv.iloc[open_bar]["open"])
+        assert trade["direction"] == "BUY"
+        assert open_bar == signal_bar + 1
+        assert float(trade["entry_fill_basis_price"]) == pytest.approx(expected_open)
+        assert float(trade["entry"]) == pytest.approx(expected_open)
+        expected_risk = abs(float(trade["entry"]) - float(trade["stop_loss"])) * float(trade["units"])
+        assert float(trade["risk_amount"]) == pytest.approx(expected_risk)
+
+
+def test_sell_signals_are_skipped_in_next_open_variant(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SellOnceStateMachine:
+        def __init__(self, *args, **kwargs) -> None:
+            self.called = False
+
+        def on_candle(self, candle: CandleRow, signal, is_blackout: bool) -> TradeInstruction | None:
+            if self.called:
+                return None
+            self.called = True
+            return TradeInstruction(
+                timestamp=candle.timestamp,
+                direction="SELL",
+                entry_price=candle.close,
+                stop_loss=candle.close + 2.0 * candle.atr_14,
+                take_profit=candle.close - 3.0 * candle.atr_14,
+                atr_at_entry=candle.atr_14,
+                signal_score=0.8,
+                regime="TRENDING_DOWN",
+                confidence=0.9,
+                machine_mode="rule_regime",
+            )
+
+    monkeypatch.setattr("aurum1.backtesting.engine.StateMachine", SellOnceStateMachine)
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(rule_regime_buy_next_open_settings(settings())).run(
+        ohlcv,
+        synthetic_macro(ohlcv),
+        synthetic_cot(ohlcv),
+        mode=MachineMode.RULE_REGIME,
+    )
+
+    assert result.total_signals > result.signals_approved
+    assert all(trade["direction"] == "BUY" for trade in result.trades)
+    assert result.rejection_reasons.get("next_open_sell_skipped", 0) > 0
+
+
+def test_no_pending_stop_fill_type_created_in_next_open_variant() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(rule_regime_buy_next_open_settings(settings())).run(
+        ohlcv,
+        synthetic_macro(ohlcv),
+        synthetic_cot(ohlcv),
+        mode=MachineMode.RULE_REGIME,
+    )
+
+    assert result.total_trades >= 1
+    assert {trade["fill_type"] for trade in result.trades} == {"next_open"}
+    assert not any(bool(trade.get("entry_gap_fill", False)) for trade in result.trades)
+    assert result.rejection_reasons.get("fill_timeout", 0) == 0
+
+
+def test_next_open_variant_preserves_equity_curve_length() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(rule_regime_buy_next_open_settings(settings())).run(
+        ohlcv,
+        synthetic_macro(ohlcv),
+        synthetic_cot(ohlcv),
+        mode=MachineMode.RULE_REGIME,
+    )
+
+    assert len(result.equity_curve) == result.total_bars == len(ohlcv)
+
+
+def test_existing_default_entry_behavior_is_not_next_open() -> None:
+    ohlcv = synthetic_ohlcv(500)
+    result = BacktestEngine(settings()).run(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv))
+
+    assert result.total_trades >= 1
+    assert "next_open" not in {trade["fill_type"] for trade in result.trades}
+    assert any(trade["fill_type"] in {"pending_stop", "gap_fill"} for trade in result.trades)
+
+
 def test_backtest_sharpe_formula() -> None:
     curve = [10000.0 * (1.001**idx) for idx in range(252)]
     result = build_backtest_result(
@@ -628,8 +750,10 @@ def test_ablation_backtest_runs_all_modes() -> None:
 
     result = run_ablation_backtest(ohlcv, synthetic_macro(ohlcv), synthetic_cot(ohlcv), settings())
 
-    assert set(result) == {mode.value for mode in MachineMode}
+    assert set(result) == {mode.value for mode in MachineMode} | {RULE_REGIME_BUY_NEXT_OPEN}
     assert all(isinstance(value, BacktestResult) for value in result.values())
+    assert result[RULE_REGIME_BUY_NEXT_OPEN].mode == RULE_REGIME_BUY_NEXT_OPEN
+    assert {trade["fill_type"] for trade in result[RULE_REGIME_BUY_NEXT_OPEN].trades} <= {"next_open"}
 
 
 def test_backtest_regime_breakdown_populated() -> None:
