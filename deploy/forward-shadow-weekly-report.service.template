@@ -1,0 +1,20 @@
+[Unit]
+Description=AURUM-1 forward shadow weekly report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aurum1
+EnvironmentFile=/opt/aurum1/.env
+Environment=ALLOW_OANDA_ORDERS=false
+Environment=ALLOW_LIVE_TRADING=false
+Environment=OANDA_ENV=practice
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian.py weekly-report
+User=aurum1
+Group=aurum1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/aurum1/logs /opt/aurum1/reports /opt/aurum1/backups

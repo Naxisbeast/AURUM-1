@@ -113,10 +113,12 @@
     "paper_spread_pips": 1.5
   },
   "backtesting": {
-    "train_bars": 6552,
-    "test_bars": 1638,
-    "step_bars": 1638,
+    "exit_mode": "FIXED",
+    "train_bars": 33264,
+    "test_bars": 11088,
+    "step_bars": 11088,
     "allow_overlap": false,
+    "lock_geometry": true,
     "market_data_db_path": "aurum1/data/backtest_market_cache.sqlite3",
     "min_history_bars": 20000,
     "min_history_days": 250,
@@ -147,5 +149,46 @@
     "log_level": "INFO",
     "log_file": "logs/aurum1.log",
     "shadow_mode": false
+  },
+  "forward_shadow": {
+    "strategy": "raw_donchian_fixed_2r",
+    "status": "research_only",
+    "paper_trade": true,
+    "allow_oanda_orders": false,
+    "risk_per_trade_pct": 0.0025,
+    "duration_months_min": 3,
+    "lookback": 20,
+    "exit_mode": "FIXED",
+    "direction": "BUY_ONLY",
+    "parameter_freeze": true,
+    "variant_switching_allowed": false,
+    "market_data_db_path": "aurum1/data/forward_shadow_market_cache.sqlite3",
+    "shadow_db_path": "reports/forward_shadow/donchian_shadow.sqlite3",
+    "weekly_report_dir": "reports/forward_shadow",
+    "historical_expectations": {
+      "net_pnl": 2511.68,
+      "profit_factor": 1.15,
+      "sharpe": 0.91,
+      "max_drawdown": 0.0779,
+      "win_rate": 0.378,
+      "trade_rate_per_week": 9.8
+    },
+    "failure_criteria": [
+      "execution_or_logging_bugs",
+      "trades_differ_from_raw_donchian_fixed_2r_rules",
+      "drawdown_exceeds_10_to_15_pct",
+      "profit_factor_below_1_0",
+      "trade_count_wildly_differs_from_historical_rate",
+      "repeated_data_feed_issues"
+    ],
+    "success_criteria_after_3_months": [
+      "net_pnl_positive_or_near_flat_with_acceptable_drawdown",
+      "profit_factor_at_least_1_10",
+      "sharpe_not_catastrophically_worse_than_backtest",
+      "max_drawdown_at_or_below_10_pct",
+      "no_execution_realism_issues",
+      "trade_count_broadly_consistent_with_historical_expectation",
+      "no_manual_intervention_needed"
+    ]
   }
 }

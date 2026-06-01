@@ -1,0 +1,14 @@
+[Unit]
+Description=AURUM-1 forward shadow SQLite backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aurum1
+ExecStart=/usr/bin/env bash /opt/aurum1/scripts/backup_forward_shadow_db.sh /opt/aurum1
+User=aurum1
+Group=aurum1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/aurum1/backups /opt/aurum1/reports
