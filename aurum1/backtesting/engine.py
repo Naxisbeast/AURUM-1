@@ -139,8 +139,12 @@ class BacktestEngine:
             price_candle = _basic_candle_from_ohlcv(timestamp, ohlcv.loc[timestamp])
             execution.update_paper_prices(price_candle)
             new_closed = execution.broker._trade_history[trade_history_cursor:]
+            open_position_ids = {position.position_id for position in execution.broker.get_open_positions()}
             for trade in new_closed:
-                meta = open_meta.pop(str(trade.get("position_id")), {})
+                position_id = str(trade.get("position_id"))
+                meta = open_meta.get(position_id, {})
+                if position_id not in open_position_ids:
+                    open_meta.pop(position_id, None)
                 closed_trades.append(_augment_trade(trade, meta, bar_index, run_settings, close_timestamp=timestamp))
             trade_history_cursor = len(execution.broker._trade_history)
             rejected += _process_pending_orders(
@@ -152,6 +156,7 @@ class BacktestEngine:
                 open_meta=open_meta,
                 rejection_reasons=rejection_reasons,
                 fill_timeout_candles=fill_timeout,
+                risk_manager=risk_manager,
             )
             next_open_approved, next_open_rejected = _process_next_open_orders(
                 next_open_orders=next_open_orders,
@@ -493,6 +498,7 @@ def _process_pending_orders(
     open_meta: dict[str, dict[str, Any]],
     rejection_reasons: Counter[str],
     fill_timeout_candles: int,
+    risk_manager: RiskManager,
 ) -> int:
     remaining: list[PendingBacktestOrder] = []
     rejected = 0
@@ -510,7 +516,19 @@ def _process_pending_orders(
             continue
 
         adjusted_instruction = _instruction_for_entry_fill(pending.order.instruction, float(fill_basis))
-        adjusted_order = replace(pending.order, instruction=adjusted_instruction)
+        # Re-evaluate sizing using the final entry + final stop to ensure correct units
+        account = execution.broker.get_account_state()
+        re_sized = risk_manager.evaluate(adjusted_instruction, account, list(execution.broker._trade_history))
+        if not re_sized.approved:
+            rejected += 1
+            rejection_reasons[re_sized.rejection_reason or "risk_recheck_rejected"] += 1
+            continue
+        adjusted_order = replace(
+            pending.order,
+            instruction=adjusted_instruction,
+            lot_size=re_sized.lot_size,
+            units=re_sized.units,
+        )
         result = execution.execute(adjusted_order)
         if result.success and result.order_id:
             requested_entry = float(pending.order.instruction.entry_price)
