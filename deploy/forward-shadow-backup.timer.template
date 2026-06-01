@@ -1,0 +1,10 @@
+[Unit]
+Description=Run AURUM-1 forward shadow SQLite backup daily
+
+[Timer]
+OnCalendar=*-*-* 23:50:00 UTC
+Persistent=true
+Unit=aurum1-forward-shadow-backup.service
+
+[Install]
+WantedBy=timers.target

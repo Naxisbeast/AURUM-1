@@ -1,0 +1,10 @@
+[Unit]
+Description=Run AURUM-1 forward shadow weekly report
+
+[Timer]
+OnCalendar=Sun 23:55:00 UTC
+Persistent=true
+Unit=aurum1-forward-shadow-weekly-report.service
+
+[Install]
+WantedBy=timers.target
