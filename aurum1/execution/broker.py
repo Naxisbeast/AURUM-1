@@ -109,6 +109,16 @@ class PaperBroker(BrokerBase):
         entry_slippage_cost = self._slippage_cost(slippage, units)
         now = datetime.now(UTC)
         position_id = f"paper_{uuid4().hex[:8]}"
+        # Rebase SL/TP distances around the actual fill price so intended risk is preserved
+        original_sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))
+        original_tp_distance = abs(float(instruction.take_profit) - float(instruction.entry_price))
+        if instruction.direction == "BUY":
+            actual_stop = float(fill_price) - original_sl_distance
+            actual_tp = float(fill_price) + original_tp_distance
+        else:
+            actual_stop = float(fill_price) + original_sl_distance
+            actual_tp = float(fill_price) - original_tp_distance
+
         self._positions[position_id] = PositionRecord(
             position_id=position_id,
             instrument=self.instrument,
@@ -117,8 +127,8 @@ class PaperBroker(BrokerBase):
             current_price=float(fill_price),
             lot_size=float(lot_size),
             units=float(units),
-            stop_loss=float(instruction.stop_loss),
-            take_profit=float(instruction.take_profit),
+            stop_loss=float(actual_stop),
+            take_profit=float(actual_tp),
             open_time=now,
             unrealised_pnl=0.0,
             broker="paper",
@@ -146,6 +156,8 @@ class PaperBroker(BrokerBase):
                 "entry_slippage_cost": float(entry_slippage_cost),
                 "units": float(units),
                 "notional_ounces": float(units * self.instrument_spec.ounces_per_unit),
+                "rebased_stop_loss": float(actual_stop),
+                "rebased_take_profit": float(actual_tp),
             },
         )
 

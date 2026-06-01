@@ -52,11 +52,21 @@ class WalkForwardValidator:
         train_bars = int(params.get("train_bars", 6552))
         test_bars = int(params.get("test_bars", 1638))
         step_bars = int(params.get("step_bars", test_bars))
+        lock_geometry = bool(params.get("lock_geometry", False))
         allow_overlap = bool(params.get("allow_overlap", False))
         if step_bars < test_bars and not allow_overlap:
             raise ValueError("Overlapping walk-forward windows require backtesting.allow_overlap=true")
         windows: list[BacktestResult] = []
         start = 0
+        if lock_geometry:
+            # estimate how many OOS windows will be produced with the locked geometry
+            est = 0
+            s = 0
+            while s + train_bars + test_bars <= len(ohlcv):
+                est += 1
+                s += step_bars
+            if est < 3:
+                raise RuntimeError("Locked walk-forward geometry requires at least 3 OOS windows; dataset too short")
         while start + train_bars + test_bars <= len(ohlcv):
             train = ohlcv.iloc[start : start + train_bars]
             test = ohlcv.iloc[start + train_bars : start + train_bars + test_bars]

@@ -144,12 +144,16 @@ def test_paper_broker_records_position() -> None:
     broker = make_paper_engine().broker
     order = make_risk_order(direction="BUY")
 
-    broker.submit_order(order)
+    result = broker.submit_order(order)
     positions = broker.get_open_positions()
 
     assert len(positions) == 1
     assert positions[0].direction == "BUY"
-    assert positions[0].stop_loss == order.instruction.stop_loss
+    original_sl_distance = abs(order.instruction.entry_price - order.instruction.stop_loss)
+    original_tp_distance = abs(order.instruction.take_profit - order.instruction.entry_price)
+    assert positions[0].stop_loss == pytest.approx(float(result.fill_price) - original_sl_distance)
+    assert positions[0].take_profit == pytest.approx(float(result.fill_price) + original_tp_distance)
+    assert positions[0].intended_entry_price == pytest.approx(order.instruction.entry_price)
 
 
 def test_paper_broker_tp_closes_position() -> None:
@@ -184,26 +188,30 @@ def test_paper_broker_sl_records_intended_and_actual_exit_price() -> None:
 
 def test_paper_broker_exit_slippage_worsens_buy_exit() -> None:
     broker = make_paper_engine().broker
-    broker.submit_order(make_risk_order(direction="BUY", stop_loss=2320.0))
+    order = make_risk_order(direction="BUY", stop_loss=2320.0)
+    broker.submit_order(order)
 
     broker.update_prices(make_candle(low=2310.0))
 
     trade = broker._trade_history[-1]
-    assert trade["intended_exit"] == 2320.0
+    original_sl_distance = abs(order.instruction.entry_price - order.instruction.stop_loss)
+    assert trade["intended_exit"] == pytest.approx(trade["actual_entry"] - original_sl_distance)
     assert trade["actual_exit"] <= trade["intended_exit"]
     assert trade["exit_slippage"] >= 0.0
     assert trade["exit_slippage_cost"] >= 0.0
-    assert trade["total_slippage_cost"] == trade["entry_slippage_cost"] + trade["exit_slippage_cost"]
+    assert trade["total_slippage_cost"] == pytest.approx(trade["entry_slippage_cost"] + trade["exit_slippage_cost"])
 
 
 def test_paper_broker_exit_slippage_worsens_sell_exit() -> None:
     broker = make_paper_engine().broker
-    broker.submit_order(make_risk_order(direction="SELL", stop_loss=2340.0, take_profit=2315.0))
+    order = make_risk_order(direction="SELL", stop_loss=2340.0, take_profit=2315.0)
+    broker.submit_order(order)
 
     broker.update_prices(make_candle(high=2341.0, low=2328.0, close=2335.0))
 
     trade = broker._trade_history[-1]
-    assert trade["intended_exit"] == 2340.0
+    original_sl_distance = abs(order.instruction.entry_price - order.instruction.stop_loss)
+    assert trade["intended_exit"] == pytest.approx(trade["actual_entry"] + original_sl_distance)
     assert trade["actual_exit"] >= trade["intended_exit"]
     assert trade["exit_slippage"] >= 0.0
     assert trade["exit_slippage_cost"] >= 0.0
