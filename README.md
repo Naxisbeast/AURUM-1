@@ -64,6 +64,44 @@ to a temporary backtest execution DB.
 Dashboard binding defaults to `127.0.0.1`. Expose it publicly only with an
 explicit reverse proxy/TLS/authentication plan.
 
+## Forward Shadow Research
+
+The locked forward-shadow candidate is `raw_donchian_fixed_2r`, BUY-only,
+Donchian lookback 20, fixed 2R exit, 0.25% risk per trade. It is research-only
+and must not submit OANDA or broker-paper orders.
+
+Start the cloud shadow service:
+
+```bash
+python scripts/forward_shadow_donchian.py service --start-date <FORWARD_SHADOW_START_DATE_UTC>
+```
+
+Set `<FORWARD_SHADOW_START_DATE_UTC>` once at deployment time and keep it frozen
+for the full 3-month research window.
+
+Required safety environment:
+
+```bash
+OANDA_ENV=practice
+ALLOW_OANDA_ORDERS=false
+ALLOW_LIVE_TRADING=false
+```
+
+Health/status:
+
+```bash
+python scripts/forward_shadow_donchian.py status
+python scripts/forward_shadow_donchian.py weekly-report
+```
+
+Systemd template:
+
+```text
+deploy/forward-shadow.service.template
+```
+
+Full instructions are in `docs/forward_shadow_donchian.md`.
+
 Runtime DB archive, non-destructive:
 
 ```bash
