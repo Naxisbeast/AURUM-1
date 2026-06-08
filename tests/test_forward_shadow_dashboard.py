@@ -6,6 +6,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from dashboard.forward_shadow_dashboard import (
@@ -15,6 +16,7 @@ from dashboard.forward_shadow_dashboard import (
     list_weekly_reports,
     load_shadow_snapshot,
     load_weekly_report,
+    simulate_skipped_signal_what_ifs,
 )
 
 
@@ -106,9 +108,9 @@ def make_shadow_db(path: Path) -> None:
                 "BUY",
                 "skipped",
                 "open_position_skip",
-                1.0,
-                0.9,
-                1.2,
+                100.0,
+                99.0,
+                102.0,
                 0.1,
                 1.0,
                 25.0,
@@ -187,3 +189,101 @@ def test_no_write_sql_statements_exist_in_dashboard_code() -> None:
 
     for token in ["INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE"]:
         assert re.search(rf"\b{token}\b", source, flags=re.IGNORECASE) is None
+
+
+def test_skipped_what_if_simulation_does_not_write_to_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "shadow.sqlite3"
+    make_shadow_db(db_path)
+    candles = candles_for_outcome("take_profit")
+
+    with sqlite3.connect(db_path) as conn:
+        before = conn.execute("SELECT COUNT(*) FROM shadow_signals").fetchone()[0]
+    snapshot = load_shadow_snapshot(db_path)
+    outcomes = simulate_skipped_signal_what_ifs(snapshot["signals"], candles)
+    with sqlite3.connect(db_path) as conn:
+        after = conn.execute("SELECT COUNT(*) FROM shadow_signals").fetchone()[0]
+
+    assert before == after
+    assert outcomes.iloc[0]["hypothetical_outcome"] == "take_profit"
+
+
+def test_skipped_what_if_missing_fields_are_graceful() -> None:
+    signals = pd.DataFrame(
+        [
+            {
+                "signal_time": "2026-01-01T00:00:00+00:00",
+                "status": "skipped",
+                "direction": "BUY",
+                "skip_reason": None,
+            }
+        ]
+    )
+    outcomes = simulate_skipped_signal_what_ifs(signals, candles_for_outcome("take_profit"))
+
+    assert len(outcomes) == 1
+    assert outcomes.iloc[0]["reason"] == "unknown"
+    assert outcomes.iloc[0]["hypothetical_outcome"] == "insufficient_stop_data"
+
+
+def test_skipped_what_if_tp_first_case() -> None:
+    outcomes = simulate_skipped_signal_what_ifs(signal_frame(), candles_for_outcome("take_profit"))
+
+    assert outcomes.iloc[0]["hypothetical_outcome"] == "take_profit"
+    assert outcomes.iloc[0]["hypothetical_R"] == pytest.approx(2.0)
+    assert outcomes.iloc[0]["candles_held"] == 1
+
+
+def test_skipped_what_if_sl_first_case() -> None:
+    outcomes = simulate_skipped_signal_what_ifs(signal_frame(), candles_for_outcome("stop_loss"))
+
+    assert outcomes.iloc[0]["hypothetical_outcome"] == "stop_loss"
+    assert outcomes.iloc[0]["hypothetical_R"] == pytest.approx(-1.0)
+    assert outcomes.iloc[0]["candles_held"] == 1
+
+
+def test_skipped_what_if_unresolved_time_exit_case() -> None:
+    outcomes = simulate_skipped_signal_what_ifs(signal_frame(), candles_for_outcome("time_exit"))
+
+    assert outcomes.iloc[0]["hypothetical_outcome"] == "time_exit"
+    assert outcomes.iloc[0]["hypothetical_R"] == pytest.approx(0.5)
+    assert outcomes.iloc[0]["candles_held"] == 1
+
+
+def signal_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "signal_time": "2026-01-01T00:00:00+00:00",
+                "status": "skipped",
+                "direction": "BUY",
+                "skip_reason": "open_position_skip",
+                "entry_price": 100.0,
+                "stop_loss": 99.0,
+                "take_profit": 102.0,
+                "atr": 0.5,
+            }
+        ]
+    )
+
+
+def candles_for_outcome(outcome: str) -> pd.DataFrame:
+    timestamps = pd.to_datetime(
+        [
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:15:00+00:00",
+            "2026-01-01T00:30:00+00:00",
+        ],
+        utc=True,
+    )
+    final = {
+        "take_profit": {"open": 100.0, "high": 102.5, "low": 99.5, "close": 102.0},
+        "stop_loss": {"open": 100.0, "high": 100.5, "low": 98.5, "close": 99.0},
+        "time_exit": {"open": 100.0, "high": 101.0, "low": 99.5, "close": 100.5},
+    }[outcome]
+    return pd.DataFrame(
+        [
+            {"timestamp": timestamps[0], "open": 99.5, "high": 100.0, "low": 99.0, "close": 99.75, "volume": 1.0},
+            {"timestamp": timestamps[1], "open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0, "volume": 1.0},
+            {"timestamp": timestamps[2], **final, "volume": 1.0},
+        ]
+    )
