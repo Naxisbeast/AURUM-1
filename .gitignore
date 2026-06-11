@@ -36,6 +36,11 @@ reports/
 !aurum1/reports/**
 aurum1/reports/__pycache__/
 .pytest_s1_tmp/
+.pytest_s2_tmp/
+.pytest_phase_reports_tmp/
+.pytest_s1_cache/
+.pytest_s2_cache/
+.pytest_phase_reports_cache/
 
 # Local data stores and caches
 aurum1/data/aurum1.sqlite3
