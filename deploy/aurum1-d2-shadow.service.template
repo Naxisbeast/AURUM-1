@@ -1,0 +1,19 @@
+[Unit]
+Description=AURUM-1 D2 shadow — Donchian + 1R exit + session/vol filter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum1
+Group=aurum1
+WorkingDirectory=/opt/aurum1
+Environment=OANDA_ENV=practice
+Environment=ALLOW_OANDA_ORDERS=false
+Environment=ALLOW_LIVE_TRADING=false
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian_d2.py
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
