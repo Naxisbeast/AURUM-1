@@ -31,7 +31,7 @@ __pycache__/
 # Runtime logs and generated reports
 logs/
 *.log
-reports/
+/reports/
 !aurum1/reports/
 !aurum1/reports/**
 aurum1/reports/__pycache__/
@@ -63,6 +63,16 @@ aurum1_deploy.zip
 .idea/
 .DS_Store
 Thumbs.db
+
+# Temporary and generated files
+*.zip
+main.py
+_live_check.py
+^
+2005Thapelo*
+aurum1_deploy.zip
+aurum1/data/*.db
+reports/backtest_execution_*.sqlite3
 
 # Frontend/dependency folders if added later
 node_modules/
