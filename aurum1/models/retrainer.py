@@ -29,10 +29,11 @@ class ModelRetrainer:
 
         validation = self._validation_window(feature_df)
         decisions: dict[str, bool] = {}
-        models = {
+        models: dict[str, Any] = {
             "regime_classifier": RegimeClassifier(self.settings),
-            "direction_predictor": DirectionPredictor(self.settings),
         }
+        if bool(self.settings.get("models", {}).get("enable_direction_predictor", False)):
+            models["direction_predictor"] = DirectionPredictor(self.settings)
         for model_name, model in models.items():
             metadata = model.train(feature_df, update_latest=False)
             evaluation = model.evaluate(validation) if len(validation) else {"validation_sharpe": 0.0}

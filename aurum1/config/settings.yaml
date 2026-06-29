@@ -112,6 +112,19 @@
     "slippage_std_pips": 0.5,
     "paper_spread_pips": 1.5
   },
+  "models": {
+    "enable_direction_predictor": false,
+    "enable_sentiment": false,
+    "regime": {
+      "n_estimators": 300,
+      "learning_rate": 0.05,
+      "max_depth": 4,
+      "num_leaves": 15,
+      "min_child_samples": 20,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8
+    }
+  },
   "backtesting": {
     "exit_mode": "FIXED",
     "train_bars": 33264,

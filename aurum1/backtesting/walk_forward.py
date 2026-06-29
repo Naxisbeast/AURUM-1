@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,12 +85,16 @@ class WalkForwardValidator:
                         classifier = RegimeClassifier(engine.settings)
                         classifier.train(train_features, update_latest=False)
                         engine.regime_classifier = classifier
-                        if "label" in train_features.columns and len(train_features) >= 80:
-                            predictor = DirectionPredictor(engine.settings)
-                            predictor.train(train_features, update_latest=False)
-                            engine.direction_predictor = predictor
-                except Exception:
-                    pass
+                        if bool(engine.settings.get("models", {}).get("enable_direction_predictor", False)):
+                            if "label" in train_features.columns and len(train_features) >= 80:
+                                predictor = DirectionPredictor(engine.settings)
+                                predictor.train(train_features, update_latest=False)
+                                engine.direction_predictor = predictor
+                except Exception as exc:
+                    logging.getLogger("aurum1.walk_forward").warning(
+                        "Model training failed for window start=%s: %s",
+                        start, exc,
+                    )
             windows.append(engine.run(test, macro, cot, htf_frames=htf_frames, mode=mode, initial_equity=initial_equity))
             start += step_bars
         return _aggregate_windows(windows)

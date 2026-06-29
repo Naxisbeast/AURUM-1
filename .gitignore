@@ -58,6 +58,11 @@ aurum1/data/*.db
 aurum1_deploy.zip
 *.zip
 
+# ML model artifacts
+**/artifacts/
+**/*.pkl
+**/*.pickle
+
 # Editor and OS files
 .vscode/
 .idea/

@@ -34,15 +34,20 @@ def main():
     print(f'  Validation F1: {rc_meta.get("validation_f1", "N/A")}')
     print(f'  Validation Sharpe: {rc_meta.get("validation_sharpe", "N/A")}')
 
-    # DirectionPredictor needs sequences - train on last 2 years to avoid OOM
-    print('\nTraining DirectionPredictor (last 48K rows)...')
-    train_window = features.iloc[-48000:].copy()
-    print(f'  Training rows: {len(train_window)}')
-    dp = DirectionPredictor(settings)
-    dp_meta = dp.train(train_window, update_latest=True)
-    print(f'  Directional accuracy: {dp_meta.get("directional_accuracy", "N/A")}')
-    print(f'  Validation Sharpe: {dp_meta.get("validation_sharpe", "N/A")}')
-    print(f'  Decision: {dp_meta.get("decision", "N/A")}')
+    # DirectionPredictor disabled by default (no verified edge over RULE_ONLY).
+    # Set models.enable_direction_predictor=true in settings to train it.
+    if bool(settings.get("models", {}).get("enable_direction_predictor", False)):
+        print('\nTraining DirectionPredictor (last 48K rows)...')
+        train_window = features.iloc[-48000:].copy()
+        print(f'  Training rows: {len(train_window)}')
+        dp = DirectionPredictor(settings)
+        dp_meta = dp.train(train_window, update_latest=True)
+        print(f'  Directional accuracy: {dp_meta.get("directional_accuracy", "N/A")}')
+        print(f'  Validation Sharpe: {dp_meta.get("validation_sharpe", "N/A")}')
+        print(f'  Decision: {dp_meta.get("decision", "N/A")}')
+    else:
+        dp_meta = {"directional_accuracy": "SKIPPED (disabled in settings)"}
+        print('  DirectionPredictor: SKIPPED (enable models.enable_direction_predictor in settings)')
 
     from aurum1.models.utils import model_dir_from_settings
     model_dir = model_dir_from_settings(settings)

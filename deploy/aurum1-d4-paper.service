@@ -1,0 +1,21 @@
+[Unit]
+Description=AURUM-1 D4 paper trader — autonomous Donchian breakout paper trading
+Documentation=https://github.com/Naxisbeast/AURUM-1
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum1
+Group=aurum1
+WorkingDirectory=/opt/aurum1
+Environment=OANDA_ENV=practice
+Environment=ALLOW_OANDA_ORDERS=false
+Environment=ALLOW_LIVE_TRADING=false
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/d4_paper_trader.py --poll-seconds 60
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

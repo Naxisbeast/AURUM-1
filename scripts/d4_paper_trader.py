@@ -60,6 +60,8 @@ class D4PaperTrader:
         self._prev_latest_ts: pd.Timestamp | None = None
         self._last_trade_count = 0
         self._paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
+        self._last_data_ts = datetime.now(UTC)
+        self._stale_warning_logged = False
         self._init_paper_db()
 
         # Load recent data
@@ -125,6 +127,18 @@ class D4PaperTrader:
 
             raw = raw.sort_index()
             new_latest = raw.index[-1]
+
+            # Stale data detection: alert if latest candle > 2 hours old during market hours
+            now = datetime.now(UTC)
+            age_minutes = (now - new_latest.to_pydatetime().replace(tzinfo=UTC)).total_seconds() / 60.0
+            is_weekend = now.weekday() >= 5 or (now.weekday() == 4 and now.hour >= 22) or (now.weekday() == 0 and now.hour < 1)
+            if age_minutes > 120 and not is_weekend:
+                if not self._stale_warning_logged:
+                    print(f"  WARNING: Stale market data — latest candle is {age_minutes:.0f} minutes old ({new_latest})")
+                    self._stale_warning_logged = True
+            else:
+                self._stale_warning_logged = False
+            self._last_data_ts = now
 
             # Only reprocess if we have new data
             if self._prev_latest_ts is not None and new_latest <= self._prev_latest_ts:
