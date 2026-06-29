@@ -135,6 +135,8 @@
     "market_data_db_path": "aurum1/data/backtest_market_cache.sqlite3",
     "min_history_bars": 20000,
     "min_history_days": 250,
+    "disable_ml": true,
+    "verify_feature_causality": false,
     "n_monte_carlo": 1000,
     "min_trades_for_stats": 10
   },
