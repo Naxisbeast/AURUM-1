@@ -48,8 +48,8 @@ class DonchianSignal:
     atr_at_signal: float
     stop_loss: float
     take_profit: float
-    direction: str = "BUY"
     reason: str
+    direction: str = "BUY"
 
 
 def main(argv: list[str] | None = None) -> int:
