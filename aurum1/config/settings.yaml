@@ -159,7 +159,7 @@
     "duration_months_min": 3,
     "lookback": 20,
     "exit_mode": "FIXED",
-    "direction": "BUY_ONLY",
+    "direction": "BUY_AND_SELL",
     "parameter_freeze": true,
     "variant_switching_allowed": false,
     "market_data_db_path": "aurum1/data/forward_shadow_market_cache.sqlite3",
