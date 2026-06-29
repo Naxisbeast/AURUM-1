@@ -48,6 +48,7 @@ class DonchianSignal:
     atr_at_signal: float
     stop_loss: float
     take_profit: float
+    direction: str = "BUY"
     reason: str
 
 
@@ -242,42 +243,56 @@ def donchian_signals(
     seed_mask: pd.Series | None = None,
 ) -> list[DonchianSignal]:
     high_break = features["close"] > features["high"].rolling(lookback, min_periods=lookback).max().shift(1)
-    valid = high_break & features["atr_14"].notna()
+    low_break = features["close"] < features["low"].rolling(lookback, min_periods=lookback).min().shift(1)
+    valid = features["atr_14"].notna()
+    buy_valid = high_break & valid
+    sell_valid = low_break & valid
     if htf_filter:
-        valid &= htf_bull_slope_filter(features)
+        buy_valid &= htf_bull_slope_filter(features)
+        sell_valid &= htf_bear_slope_filter(features)
     if seed_mask is not None:
-        valid = seed_mask & features["atr_14"].notna()
+        buy_valid = seed_mask & valid
+        sell_valid = seed_mask & valid
         if htf_filter:
-            valid &= htf_bull_slope_filter(features)
+            buy_valid &= htf_bull_slope_filter(features)
+            sell_valid &= htf_bear_slope_filter(features)
     signals: list[DonchianSignal] = []
-    for signal_time in features.index[valid.fillna(False)]:
-        signal_bar = int(ohlcv.index.get_loc(signal_time))
-        entry_bar = signal_bar + 1
-        if entry_bar >= len(ohlcv):
-            continue
-        entry_time = ohlcv.index[entry_bar]
-        entry = float(ohlcv.iloc[entry_bar]["open"])
-        atr_value = float(features.loc[signal_time, "atr_14"])
-        if not math.isfinite(atr_value) or atr_value <= 0.0:
-            continue
-        stop_loss = entry - 2.0 * atr_value
-        if stop_loss >= entry:
-            continue
-        take_profit = entry + 2.0 * (entry - stop_loss)
-        signals.append(
-            DonchianSignal(
-                strategy="donchian_long_only",
-                signal_bar=signal_bar,
-                entry_bar=entry_bar,
-                signal_time=signal_time.isoformat(),
-                entry_time=entry_time.isoformat(),
-                entry_price=entry,
-                atr_at_signal=atr_value,
-                stop_loss=float(stop_loss),
-                take_profit=float(take_profit),
-                reason="donchian_20_breakout",
+    for direction, mask in [("BUY", buy_valid), ("SELL", sell_valid)]:
+        for signal_time in features.index[mask.fillna(False)]:
+            signal_bar = int(ohlcv.index.get_loc(signal_time))
+            entry_bar = signal_bar + 1
+            if entry_bar >= len(ohlcv):
+                continue
+            entry_time = ohlcv.index[entry_bar]
+            entry = float(ohlcv.iloc[entry_bar]["open"])
+            atr_value = float(features.loc[signal_time, "atr_14"])
+            if not math.isfinite(atr_value) or atr_value <= 0.0:
+                continue
+            if direction == "BUY":
+                stop_loss = entry - 2.0 * atr_value
+                if stop_loss >= entry:
+                    continue
+                take_profit = entry + 2.0 * (entry - stop_loss)
+            else:
+                stop_loss = entry + 2.0 * atr_value
+                if stop_loss <= entry:
+                    continue
+                take_profit = entry - 2.0 * (stop_loss - entry)
+            signals.append(
+                DonchianSignal(
+                    strategy="donchian_long_short",
+                    signal_bar=signal_bar,
+                    entry_bar=entry_bar,
+                    signal_time=signal_time.isoformat(),
+                    entry_time=entry_time.isoformat(),
+                    entry_price=entry,
+                    atr_at_signal=atr_value,
+                    stop_loss=float(stop_loss),
+                    take_profit=float(take_profit),
+                    direction=direction,
+                    reason=f"donchian_20_{direction.lower()}_breakout",
+                )
             )
-        )
     return signals
 
 
@@ -287,6 +302,15 @@ def htf_bull_slope_filter(features: pd.DataFrame) -> pd.Series:
         features["H4_ema_200"].notna()
         & (features["H4_ema_200"] > features["H4_ema_200"].shift(h4_step))
         & (features["H4_close"] > features["H4_ema_200"])
+    )
+
+
+def htf_bear_slope_filter(features: pd.DataFrame) -> pd.Series:
+    h4_step = 16 * 5
+    return (
+        features["H4_ema_200"].notna()
+        & (features["H4_ema_200"] < features["H4_ema_200"].shift(h4_step))
+        & (features["H4_close"] < features["H4_ema_200"])
     )
 
 

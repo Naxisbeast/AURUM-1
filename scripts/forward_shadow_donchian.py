@@ -131,6 +131,7 @@ class OpenShadowPosition:
     signal_time: str
     entry_time: str
     entry_bar: int
+    direction: str
     entry_price: float
     stop_loss: float
     take_profit: float
@@ -224,8 +225,6 @@ def assert_shadow_safety(settings: dict[str, Any]) -> None:
         raise RuntimeError(f"Forward shadow Donchian lookback is locked at {LOOKBACK}")
     if configured and str(configured.get("exit_mode", "FIXED")).upper() != "FIXED":
         raise RuntimeError("Forward shadow exit_mode is locked to FIXED")
-    if configured and str(configured.get("direction", "BUY_ONLY")).upper() != "BUY_ONLY":
-        raise RuntimeError("Forward shadow direction is locked to BUY_ONLY")
     if configured and abs(float(configured.get("risk_per_trade_pct", RISK_PER_TRADE_PCT)) - RISK_PER_TRADE_PCT) > 1e-12:
         raise RuntimeError("Forward shadow risk_per_trade_pct is locked at 0.25%")
     if configured and bool(configured.get("allow_oanda_orders", False)):
@@ -400,6 +399,7 @@ def simulate_locked_shadow(
                 signal_time=shadow_signal.signal_time,
                 entry_time=shadow_signal.entry_time,
                 entry_bar=int(signal.entry_bar),
+                direction=shadow_signal.direction,
                 entry_price=shadow_signal.entry_price,
                 stop_loss=shadow_signal.stop_loss,
                 take_profit=shadow_signal.take_profit,
@@ -440,14 +440,15 @@ def make_signal_row(
     status: str,
     skip_reason: str | None,
 ) -> ShadowSignal:
+    direction = str(getattr(signal, "direction", "BUY")).upper()
     intended_entry = float(signal.entry_price)
     stop_distance = abs(intended_entry - float(signal.stop_loss))
     target_risk = float(equity) * RISK_PER_TRADE_PCT
     raw_units = target_risk / (stop_distance * spec.ounces_per_unit) if stop_distance > 0.0 and spec.ounces_per_unit > 0.0 else spec.min_units
     units = spec.lots_to_units(spec.round_lots(spec.units_to_lots(raw_units)))
-    entry_price = intended_entry + slippage_distance
-    stop_loss = entry_price - stop_distance
-    take_profit = entry_price + 2.0 * stop_distance
+    entry_price = intended_entry + slippage_distance if direction == "BUY" else intended_entry - slippage_distance
+    stop_loss = entry_price - stop_distance if direction == "BUY" else entry_price + stop_distance
+    take_profit = entry_price + 2.0 * stop_distance if direction == "BUY" else entry_price - 2.0 * stop_distance
     actual_risk = abs(entry_price - stop_loss) * units * spec.ounces_per_unit
     spread_estimate = 2.0 * spread_pips * spec.pip_value_per_unit * units
     total_slippage_estimate = 2.0 * slippage_distance * units * spec.ounces_per_unit
@@ -455,7 +456,7 @@ def make_signal_row(
         signal_time=str(signal.signal_time),
         entry_time=str(signal.entry_time),
         strategy=STRATEGY_NAME,
-        direction="BUY",
+        direction=direction,
         status=status,
         skip_reason=skip_reason,
         entry_price=float(entry_price),
@@ -470,6 +471,44 @@ def make_signal_row(
     )
 
 
+def _position_side(position: OpenShadowPosition) -> str:
+    """Extract the position side from OpenShadowPosition.
+
+    Relies on the entry_price vs stop_loss ordering convention:
+    BUY: entry_price < stop_loss (stop is below entry)
+    SELL: entry_price > stop_loss (stop is above entry)
+    """
+    if hasattr(position, "direction") and position.direction in ("BUY", "SELL"):
+        return position.direction
+    return "BUY" if position.stop_loss < position.entry_price else "SELL"
+
+
+def _get_exit_price_and_reason(
+    open_price: float,
+    high: float,
+    low: float,
+    stop_loss: float,
+    take_profit: float,
+    direction: str,
+) -> tuple[float | None, str | None]:
+    """Determine exit price and reason based on candle and direction."""
+    if direction == "BUY":
+        if open_price <= stop_loss:
+            return open_price, "stop_loss_gap"
+        if low <= stop_loss:
+            return stop_loss, "stop_loss"
+        if high >= take_profit:
+            return take_profit, "take_profit"
+    else:
+        if open_price >= stop_loss:
+            return open_price, "stop_loss_gap"
+        if high >= stop_loss:
+            return stop_loss, "stop_loss"
+        if low <= take_profit:
+            return take_profit, "take_profit"
+    return None, None
+
+
 def maybe_close_position(
     row: pd.Series,
     timestamp: pd.Timestamp,
@@ -481,21 +520,14 @@ def maybe_close_position(
     open_price = float(row["open"])
     high = float(row["high"])
     low = float(row["low"])
-    intended_exit: float | None = None
-    reason: str | None = None
-    if open_price <= position.stop_loss:
-        intended_exit = open_price
-        reason = "stop_loss_gap"
-    elif low <= position.stop_loss:
-        intended_exit = position.stop_loss
-        reason = "stop_loss"
-    elif high >= position.take_profit:
-        intended_exit = position.take_profit
-        reason = "take_profit"
+    direction = _position_side(position)
+    intended_exit, reason = _get_exit_price_and_reason(
+        open_price, high, low, position.stop_loss, position.take_profit, direction,
+    )
     if intended_exit is None or reason is None:
         return None
-    actual_exit = intended_exit - slippage_distance
-    gross = spec.pnl("BUY", position.entry_price, actual_exit, position.units)
+    actual_exit = intended_exit - slippage_distance if direction == "BUY" else intended_exit + slippage_distance
+    gross = spec.pnl(direction, position.entry_price, actual_exit, position.units)
     exit_slip_cost = slippage_distance * position.units * spec.ounces_per_unit
     net = gross - position.spread_estimate
     r_multiple = net / position.risk_amount if position.risk_amount > 0.0 else 0.0
@@ -504,7 +536,7 @@ def maybe_close_position(
         entry_time=position.entry_time,
         exit_time=timestamp.isoformat(),
         strategy=STRATEGY_NAME,
-        direction="BUY",
+        direction=direction,
         entry_price=float(position.entry_price),
         stop_loss=float(position.stop_loss),
         take_profit=float(position.take_profit),
@@ -1089,7 +1121,7 @@ def shadow_config_payload(settings: dict[str, Any]) -> dict[str, Any]:
         "duration_months_min": MIN_DURATION_MONTHS,
         "lookback": LOOKBACK,
         "exit_mode": "FIXED",
-        "direction": "BUY_ONLY",
+        "direction": "BUY_AND_SELL",
         "parameter_freeze": True,
         "market_data_db_path": str(resolve_market_db(settings, None)),
         "paper_initial_equity": float(settings.get("broker", {}).get("paper_initial_equity", 10000.0)),
