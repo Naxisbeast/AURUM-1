@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import math
 import tempfile
 from collections import Counter
@@ -256,6 +257,19 @@ class BacktestEngine:
         )
         result.trades.append({"backtest_log_size": len(backtest_log), "type": "metadata"})
         result.trades.pop()
+
+        # Integrity warning: net PnL + initial equity should roughly match final equity.
+        # A mismatch indicates fee double-counting or equity not tracking trade PnL.
+        pnl_total = sum(float(t.get("net_pnl", 0.0)) for t in result.trades)
+        implied = initial_equity + pnl_total
+        delta = result.final_equity - implied
+        if abs(delta) > 1.0:
+            logging.getLogger("aurum1.backtest").warning(
+                "Fee accounting gap: implied_equity=%.2f != final_equity=%.2f (delta=%.2f). "
+                "Open position unrealised PnL or fee_in_equity mismatch.",
+                implied, result.final_equity, delta,
+            )
+
         return result
 
     def _build_causal_feature_table(
@@ -265,32 +279,30 @@ class BacktestEngine:
         cot: pd.DataFrame,
         htf_frames: dict[str, pd.DataFrame] | None,
     ) -> pd.DataFrame:
-        try:
-            return FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
-                ohlcv,
-                macro,
-                cot,
-                htf_frames=htf_frames,
-                include_target=False,
-            )
-        except ValueError:
-            rows: list[pd.DataFrame] = []
-            for end in range(WARMUP_BARS + 1, len(ohlcv) + 1):
-                try:
-                    prefix_features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
-                        ohlcv.iloc[:end],
-                        macro,
-                        cot,
-                        htf_frames=_slice_htf_frames(htf_frames, ohlcv.index[end - 1]),
-                        include_target=False,
-                    )
-                except ValueError:
-                    if rows:
-                        break
-                    continue
-                if not prefix_features.empty:
-                    rows.append(prefix_features.tail(1))
-            return pd.concat(rows).sort_index() if rows else pd.DataFrame()
+        """Build features incrementally (bar-by-bar prefix) to guarantee causality.
+
+        Using the full-dataset path is faster but creates a risk of subtle data
+        leakage through rolling statistics that depend on future bars. The
+        incremental prefix path ensures every feature uses only data available
+        at that timestamp. This is O(n * warmup) but guarantees correctness.
+        """
+        rows: list[pd.DataFrame] = []
+        for end in range(WARMUP_BARS + 1, len(ohlcv) + 1):
+            try:
+                prefix_features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
+                    ohlcv.iloc[:end],
+                    macro,
+                    cot,
+                    htf_frames=_slice_htf_frames(htf_frames, ohlcv.index[end - 1]),
+                    include_target=False,
+                )
+            except ValueError:
+                if rows:
+                    break
+                continue
+            if not prefix_features.empty:
+                rows.append(prefix_features.tail(1))
+        return pd.concat(rows).sort_index() if rows else pd.DataFrame()
 
     def _infer_signal(
         self,

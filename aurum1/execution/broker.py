@@ -210,6 +210,12 @@ class PaperBroker(BrokerBase):
             self._close_position_at_price(position_id, close_price, reason)
 
     def get_account_state(self) -> AccountState:
+        open_risk = 0.0
+        for pos in self._positions.values():
+            risk_dist = abs(float(pos.open_price) - float(pos.stop_loss))
+            if risk_dist > 0.0:
+                open_risk += risk_dist * float(pos.units) * self.instrument_spec.ounces_per_unit
+        open_risk_pct = (open_risk / float(self._equity) * 100.0) if self._equity > 0.0 else 0.0
         return AccountState(
             equity=float(self._equity),
             balance=float(self._balance),
@@ -217,7 +223,7 @@ class PaperBroker(BrokerBase):
             daily_pnl=float(self._daily_pnl),
             peak_equity_30d=float(self._peak_equity_30d),
             current_spread_pips=self.get_current_spread_pips(self.instrument),
-            open_risk_pct=0.0,
+            open_risk_pct=open_risk_pct,
         )
 
     def get_open_positions(self) -> list[PositionRecord]:
@@ -319,7 +325,10 @@ class PaperBroker(BrokerBase):
         )
         if slippage_std <= 0.0:
             return 0.0
-        return abs(self._rng.gauss(0.0, slippage_std))
+        # True gaussian (not abs() folded-normal): zero slippage is the most likely
+        # single outcome, and price improvement (negative slippage) is possible in
+        # liquid markets with limit orders.
+        return self._rng.gauss(0.0, slippage_std)
 
     @staticmethod
     def _worsen_entry_price(direction: str, intended_price: float, slippage: float) -> float:

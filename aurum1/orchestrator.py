@@ -878,7 +878,7 @@ def _mode_from_settings(settings: dict[str, Any]) -> MachineMode:
     raw = (
         settings.get("orchestrator", {}).get("mode")
         or settings.get("signals", {}).get("default_machine_mode")
-        or MachineMode.RULE_REGIME.value
+        or MachineMode.RULE_ONLY.value
     )
     if isinstance(raw, MachineMode):
         return raw
@@ -886,7 +886,7 @@ def _mode_from_settings(settings: dict[str, Any]) -> MachineMode:
     for mode in MachineMode:
         if raw_text in {mode.value, mode.name.lower()}:
             return mode
-    return MachineMode.RULE_REGIME
+    return MachineMode.RULE_ONLY
 
 
 def _provider_ohlcv_to_indexed(frame: pd.DataFrame) -> pd.DataFrame:
