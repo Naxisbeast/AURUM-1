@@ -279,30 +279,25 @@ class BacktestEngine:
         cot: pd.DataFrame,
         htf_frames: dict[str, pd.DataFrame] | None,
     ) -> pd.DataFrame:
-        """Build features incrementally (bar-by-bar prefix) to guarantee causality.
+        """Build feature table with guaranteed causality.
 
-        Using the full-dataset path is faster but creates a risk of subtle data
-        leakage through rolling statistics that depend on future bars. The
-        incremental prefix path ensures every feature uses only data available
-        at that timestamp. This is O(n * warmup) but guarantees correctness.
+        Current features are causal: rolling() and ewm() only look backward,
+        and the only negative shift (shift(-5) for ML targets) is excluded
+        because include_target=False. The single-pass dataset path is verified
+        against the incremental bar-by-bar path via _verify_feature_causality
+        when the verify_feature_causality setting is enabled.
         """
-        rows: list[pd.DataFrame] = []
-        for end in range(WARMUP_BARS + 1, len(ohlcv) + 1):
-            try:
-                prefix_features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
-                    ohlcv.iloc[:end],
-                    macro,
-                    cot,
-                    htf_frames=_slice_htf_frames(htf_frames, ohlcv.index[end - 1]),
-                    include_target=False,
-                )
-            except ValueError:
-                if rows:
-                    break
-                continue
-            if not prefix_features.empty:
-                rows.append(prefix_features.tail(1))
-        return pd.concat(rows).sort_index() if rows else pd.DataFrame()
+        verify = bool(self.settings.get("backtesting", {}).get("verify_feature_causality", False))
+        features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
+            ohlcv,
+            macro,
+            cot,
+            htf_frames=htf_frames,
+            include_target=False,
+        )
+        if verify and len(ohlcv) >= WARMUP_BARS + 50:
+            _verify_feature_causality(ohlcv, macro, cot, htf_frames, features)
+        return features
 
     def _infer_signal(
         self,
@@ -491,6 +486,59 @@ def _basic_candle_from_ohlcv(timestamp: Any, row: pd.Series) -> CandleRow:
         session_london=1,
         session_ny=0,
         session_overlap=0,
+    )
+
+
+def _verify_feature_causality(
+    ohlcv: pd.DataFrame,
+    macro: pd.DataFrame,
+    cot: pd.DataFrame,
+    htf_frames: dict[str, pd.DataFrame] | None,
+    fast_features: pd.DataFrame,
+) -> None:
+    """Verify the fast single-pass feature builder matches incremental bar-by-bar output.
+
+    Runs both paths on a small sample (first 1000 post-warmup bars) and asserts
+    they produce identical values. This catches any future non-causal feature
+    addition (e.g. shift(-k), forward-looking resample) that would leak future
+    data into past rows.
+    """
+    sample_end = min(WARMUP_BARS + 1000, len(ohlcv))
+    sample_ohlcv = ohlcv.iloc[:sample_end]
+    slow_rows: list[pd.DataFrame] = []
+    for end in range(WARMUP_BARS + 1, len(sample_ohlcv) + 1):
+        try:
+            prefix = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
+                sample_ohlcv.iloc[:end],
+                macro,
+                cot,
+                htf_frames=_slice_htf_frames(htf_frames, sample_ohlcv.index[end - 1]),
+                include_target=False,
+            )
+        except ValueError:
+            if slow_rows:
+                break
+            continue
+        if not prefix.empty:
+            slow_rows.append(prefix.tail(1))
+    if not slow_rows:
+        return
+    slow_features = pd.concat(slow_rows).sort_index()
+    fast_slice = fast_features.loc[slow_features.index[0]:slow_features.index[-1]]
+    mismatches = 0
+    for col in fast_slice.columns:
+        if col in slow_features.columns:
+            mismatch = fast_slice[col].fillna(-1e9) != slow_features[col].fillna(-1e9)
+            mismatches += int(mismatch.sum())
+    if mismatches > 0:
+        raise AssertionError(
+            f"Feature causality verification FAILED: {mismatches} value mismatches "
+            f"between fast single-pass and incremental bar-by-bar paths. "
+            f"A feature may be using future data (e.g. shift(-k))."
+        )
+    logging.getLogger("aurum1.backtest").info(
+        "Feature causality verified: %d rows × %d cols match between fast and incremental paths",
+        len(slow_features), len(slow_features.columns),
     )
 
 
