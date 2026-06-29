@@ -129,6 +129,8 @@ def initialize_database(db_path: str | Path) -> None:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         with conn:
             for timeframe in TIMEFRAMES:
                 conn.execute(

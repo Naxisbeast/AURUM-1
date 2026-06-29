@@ -134,7 +134,7 @@
     "health_port": 8080
   },
   "orchestrator": {
-    "mode": "rule_regime",
+    "mode": "rule_only",
     "candle_interval_minutes": 15,
     "candle_buffer_seconds": 5,
     "macro_refresh_minutes": 60,

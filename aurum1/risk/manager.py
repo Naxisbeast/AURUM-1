@@ -110,21 +110,23 @@ class RiskManager:
         if len(trade_history) < int(self._setting("kelly_min_trades", 20)):
             return float(self._setting("kelly_default_fraction", 0.25))
 
-        realised = [_realised_trade_pnl(trade) for trade in trade_history]
-        wins = [value for value in realised if value > 0.0]
-        losses = [value for value in realised if value <= 0.0]
+        # Use R-multiple (PnL / risk_amount) to normalize across varying position sizes.
+        # Raw dollar PnL distorts the W/L ratio because large and small positions
+        # have different dollar variances but consistent R-multiples.
+        r_values = [_realised_trade_r(trade) for trade in trade_history]
+        wins = [r for r in r_values if r > 0.0]
+        losses = [r for r in r_values if r <= 0.0]
         win_rate = len(wins) / len(trade_history)
         avg_win = mean(wins) if wins else 0.0
         avg_loss = abs(mean(losses)) if losses else 1.0
         win_loss_ratio = avg_win / avg_loss if avg_loss > 0.0 else 1.0
         full_kelly = 0.0 if win_loss_ratio <= 0.0 else win_rate - (1.0 - win_rate) / win_loss_ratio
         full_kelly = max(0.0, full_kelly)
-        return float(
-            min(
-                full_kelly * self._setting("kelly_cap", 0.25),
-                self._setting("kelly_max_fraction", 0.25),
-            )
-        )
+        # Single cap: fractional Kelly (kelly_cap * full_kelly),
+        # never exceeding kelly_max_fraction as an absolute limit.
+        capped = full_kelly * self._setting("kelly_cap", 0.25)
+        max_frac = float(self._setting("kelly_max_fraction", 0.25))
+        return float(min(capped, max_frac if max_frac > 0.0 else 1.0))
 
     def _position_size(self, instruction: TradeInstruction, adjusted_risk: float) -> tuple[float, float]:
         sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))
@@ -188,11 +190,26 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _realised_trade_pnl(trade: dict[str, Any]) -> float:
+    """Return net dollar PnL for fee/cost tracking."""
     if "net_pnl" in trade:
         return float(trade["net_pnl"])
     if "pnl_after_fees" in trade:
         return float(trade["pnl_after_fees"])
     return float(trade.get("pnl", 0.0))
+
+
+def _realised_trade_r(trade: dict[str, Any]) -> float:
+    """Return R-multiple (PnL / risk_amount) for Kelly calculation.
+
+    R-multiple normalises across varying position sizes so that the
+    win/loss distribution reflects the strategy's edge, not the
+    dollar variance of differently-sized bets.
+    """
+    pnl = _realised_trade_pnl(trade)
+    risk = float(trade.get("risk_amount", trade.get("risk_amt", 1.0)))
+    if abs(risk) < 1e-12:
+        return 0.0
+    return pnl / risk
 
 
 __all__ = ["AccountState", "RiskManager", "RiskOrder"]

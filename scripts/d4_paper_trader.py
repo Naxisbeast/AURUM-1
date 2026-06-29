@@ -49,16 +49,16 @@ class D4PaperTrader:
         self.slip_dist = self.slip_pips * self.spec.pip_size
         self.stop_requested = threading.Event()
 
-        # Core components (no AurumDataIngestor — we read from local cache)
+        # Core components
         self.execution = ExecutionEngine(settings)
         self.risk_mgr = RiskManager(settings)
         self.ohlcv_buffer = pd.DataFrame()
         self.features = pd.DataFrame()
-        self.position = None
-        self._prev_latest_ts: pd.Timestamp | None = None
         self.trades: list[dict] = []
         self.last_signal_time = None
         self._last_processed_ts: pd.Timestamp | None = None
+        self._prev_latest_ts: pd.Timestamp | None = None
+        self._last_trade_count = 0
         self._paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
         self._init_paper_db()
 
@@ -70,7 +70,7 @@ class D4PaperTrader:
         print(f"  Market cache: {self.market_db}")
         print(f"  Strategy: Donchian 20, BUY+SELL, 2R exit")
         print(f"  Risk: {RISK_PCT*100:.2f}% per trade")
-        print(f"  Broker: paper")
+        print(f"  Broker: paper (PaperBroker handles SL/TP natively)")
         account = self.execution.broker.get_account_state()
         print(f"  Starting equity: ${account.equity:.2f}")
 
@@ -78,6 +78,8 @@ class D4PaperTrader:
         """Create paper_trading.sqlite3 schema if it doesn't exist."""
         self._paper_db.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(str(self._paper_db))) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,58 +147,51 @@ class D4PaperTrader:
                         stop_loss, take_profit, units, r_multiple, net_pnl, exit_reason)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    trade["time"], trade["direction"],
-                    float(trade["entry"]), float(trade["exit"]),
-                    float(self.position["stop"]), float(self.position["target"]),
-                    int(self.position["units"]),
-                    float(trade["r"]), float(trade["pnl"]), trade["reason"]
+                    trade.get("closed_at", trade["time"]), trade["direction"],
+                    float(trade.get("entry", trade.get("actual_entry", 0))),
+                    float(trade.get("exit", trade.get("actual_exit", 0))),
+                    float(trade.get("stop_loss", 0)), float(trade.get("take_profit", 0)),
+                    int(trade.get("units", 1)),
+                    float(trade.get("r", trade.get("r_multiple", 0))),
+                    float(trade.get("pnl", trade.get("net_pnl", 0))), trade["reason"]
                 ))
-                # Also snapshot equity
-                account = self.execution.broker.get_account_state()
-                conn.execute("""
-                    INSERT INTO account_snapshots (timestamp, equity, position_count)
-                    VALUES (?, ?, ?)
-                """, (trade["time"], account.equity, int(self.position is not None)))
                 conn.commit()
         except Exception as exc:
             print(f"  DB persist error: {exc}")
 
-    def _check_exits(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
-        """Check if current position should be closed."""
-        if self.position is None or bar_idx <= self.position["entry_bar"]:
-            return
+    def _new_trades(self):
+        """Return trades completed since last check via PaperBroker."""
+        history = self.execution.broker._trade_history
+        new_count = len(history) - self._last_trade_count
+        self._last_trade_count = len(history)
+        return history[-new_count:] if new_count > 0 else []
 
-        o, h, l = float(row["open"]), float(row["high"]), float(row["low"])
-        d = self.position["direction"]
-        ex_price = None; reason = None
+    def process_candle(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
+        """Process one completed M15 candle via PaperBroker for exits, then check entries."""
+        # Step 1: Let PaperBroker check SL/TP natively (handles slippage, spread, logging)
+        candle_row = CandleRow(
+            timestamp=ts.to_pydatetime(),
+            open=float(row["open"]), high=float(row["high"]),
+            low=float(row["low"]), close=float(row["close"]),
+            volume=float(row["volume"]),
+            atr_14=max(1e-9, float(row["high"] - row["low"])),
+            adx_14=0.0, ema_9=0.0, ema_20=0.0,
+            session_london=1, session_ny=0, session_overlap=0,
+        )
+        self.execution.broker.update_prices(candle_row)
 
-        if d == "BUY":
-            if o <= self.position["stop"]: ex_price, reason = o, "stop_loss_gap"
-            elif l <= self.position["stop"]: ex_price, reason = self.position["stop"], "stop_loss"
-            elif h >= self.position["target"]: ex_price, reason = self.position["target"], "take_profit"
-        else:
-            if o >= self.position["stop"]: ex_price, reason = o, "stop_loss_gap"
-            elif h >= self.position["stop"]: ex_price, reason = self.position["stop"], "stop_loss"
-            elif l <= self.position["target"]: ex_price, reason = self.position["target"], "take_profit"
+        # Step 2: Persist newly closed trades
+        for trade in self._new_trades():
+            self.trades.append(trade)
+            self._persist_trade(trade)
+            d = trade.get("direction", "?")
+            r = trade.get("r", trade.get("r_multiple", 0))
+            pnl = trade.get("pnl", trade.get("net_pnl", 0))
+            reason = trade.get("reason", "unknown")
+            print(f"  EXIT {d} R={r:+.3f} PnL=${pnl:+.2f} | {reason}")
 
-        if ex_price and reason:
-            actual_exit = ex_price - self.slip_dist if d == "BUY" else ex_price + self.slip_dist
-            gross = self.spec.pnl(d, self.position["entry"], actual_exit, self.position["units"])
-            net = gross - self.position["spread"]
-            r_val = net / self.position["risk_amt"] if self.position["risk_amt"] > 0 else 0.0
-            trade_record = {"direction": d, "entry": self.position["entry"], "exit": actual_exit,
-                "r": r_val, "pnl": net, "reason": reason, "time": ts.isoformat()}
-            self.trades.append(trade_record)
-            self._persist_trade(trade_record)
-            # Also close via execution engine for logging
-            for pos in self.execution.broker.get_open_positions():
-                self.execution.broker._close_position_at_price(pos.position_id, actual_exit, reason)
-            print(f"  EXIT {d} R={r_val:+.3f} PnL=${net:+.2f} | {reason}")
-            self.position = None
-
-    def _check_entries(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
-        """Check for new Donchian breakout signals and enter if valid."""
-        if self.position is not None:
+        # Step 3: Check for new entry (only if no open positions)
+        if self.execution.broker.get_open_positions():
             return
         if self.features.empty or ts not in self.features.index:
             return
@@ -206,9 +201,8 @@ class D4PaperTrader:
         if not math.isfinite(atr) or atr <= 0:
             return
 
-        # Check BUY signal: close > 20-bar high
+        # Donchian breakout: close > 20-bar high (BUY) or close < 20-bar low (SELL)
         high_20 = float(self.ohlcv_buffer["high"].rolling(LOOKBACK, min_periods=LOOKBACK).max().shift(1).loc[ts]) if ts in self.ohlcv_buffer.index else float(feat.get("close", 0))
-        # Check SELL signal: close < 20-bar low
         low_20 = float(self.ohlcv_buffer["low"].rolling(LOOKBACK, min_periods=LOOKBACK).min().shift(1).loc[ts]) if ts in self.ohlcv_buffer.index else float(feat.get("close", 0))
         close = float(row["close"])
 
@@ -233,7 +227,7 @@ class D4PaperTrader:
         risk_dist = abs(entry_price - stop_loss)
         take_profit = entry_price + 2.0 * risk_dist if direction == "BUY" else entry_price - 2.0 * risk_dist
 
-        # Create instruction and route through risk manager
+        # Route through risk manager and execution engine
         account = self.execution.broker.get_account_state()
         instruction = TradeInstruction(
             timestamp=ts.to_pydatetime(), direction=direction, entry_price=entry_price,
@@ -244,24 +238,12 @@ class D4PaperTrader:
         if not risk_order.approved:
             return
 
-        result = self.execution.broker.submit_order(risk_order)
+        result = self.execution.execute(risk_order)
         if not result.success:
             return
 
-        eq = account.equity
-        spread = 2.0 * self.sp * self.spec.pip_value_per_unit * risk_order.units
-        actual_risk = risk_dist * risk_order.units * self.spec.ounces_per_unit
-
-        self.position = {"direction": direction, "entry": float(result.fill_price),
-            "stop": stop_loss, "target": take_profit, "entry_bar": bar_idx,
-            "units": risk_order.units, "risk_amt": actual_risk, "spread": spread}
         self.last_signal_time = ts
         print(f"  ENTRY {direction} @ ${result.fill_price:.2f} | SL=${stop_loss:.2f} TP=${take_profit:.2f} | Units={risk_order.units}")
-
-    def process_candle(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
-        """Process one completed M15 candle."""
-        self._check_exits(row, ts, bar_idx)
-        self._check_entries(row, ts, bar_idx)
 
     def run_once(self):
         """Process all new candles since the last check."""
@@ -312,7 +294,12 @@ class D4PaperTrader:
     def _print_status(self):
         """Print current status line."""
         account = self.execution.broker.get_account_state()
-        pos_info = f" | POS: {self.position['direction']} @ ${self.position['entry']:.2f}" if self.position else " | NO POSITION"
+        positions = self.execution.broker.get_open_positions()
+        if positions:
+            p = positions[0]
+            pos_info = f" | {p.direction} @ ${p.open_price:.2f} SL=${p.stop_loss:.2f} TP=${p.take_profit:.2f}"
+        else:
+            pos_info = " | NO POSITION"
         print(f"  [{datetime.now(UTC).strftime('%H:%M:%S')}] EQ=${account.equity:.2f}{pos_info}")
 
     def _print_summary(self):
@@ -324,7 +311,10 @@ class D4PaperTrader:
         print(f"Final equity: ${account.equity:.2f}")
         print(f"Trades: {len(self.trades)}")
         if self.trades:
-            r_vals = [t["r"] for t in self.trades]
+            r_vals = []
+            for t in self.trades:
+                r = t.get("r", t.get("r_multiple", t.get("net_pnl", 0)))
+                r_vals.append(r)
             wins = sum(1 for r in r_vals if r > 0)
             losses = sum(1 for r in r_vals if r < 0)
             gain = sum(abs(r) for r in r_vals if r > 0)
@@ -333,8 +323,9 @@ class D4PaperTrader:
             print(f"WR: {wins}/{wins+losses} = {wins/len(r_vals)*100:.1f}%")
             print(f"PF: {pf:.4f}")
             print(f"Net R: {sum(r_vals):+.2f}")
-            print(f"Net PnL: ${sum(t['pnl'] for t in self.trades):+.2f}")
-            print(f"Exits: {dict(Counter(t['reason'] for t in self.trades))}")
+            print(f"Net PnL: ${sum(t.get('pnl', t.get('net_pnl', 0)) for t in self.trades):+.2f}")
+            reasons = [t.get("reason", "unknown") for t in self.trades]
+            print(f"Exits: {dict(Counter(reasons))}")
 
 
 def main():
