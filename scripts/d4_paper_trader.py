@@ -1,13 +1,13 @@
 """D4 Paper Trader — autonomous paper trading using the best strategy.
 
 D4 (Donchian 20, BUY+SELL, 2R exit) running as a continuous service with:
-  - Real tick/candle processing via OANDA data feed
+  - Candle processing via local market cache (forward shadow keeps it populated)
   - PaperBroker for order execution (no real money)
   - RiskManager for position sizing
-  - Trade logging to aurum1.sqlite3
-  - Health endpoint for monitoring
+  - Trade logging to paper_trading.sqlite3
 
-This is the bridge between shadow testing and live trading.
+This reads from the forward_shadow_market_cache.sqlite3 that the
+aurum1-forward-shadow.service maintains, so no OANDA/yfinance API key is needed.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 
-from aurum1.data.ingestion import AurumDataIngestor, load_ohlcv, load_settings
+from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.execution import ExecutionEngine
 from aurum1.instruments import InstrumentSpec
 from aurum1.risk import RiskManager
@@ -42,65 +42,124 @@ class D4PaperTrader:
 
     def __init__(self, settings: dict[str, Any]):
         self.settings = settings
+        self.market_db = MARKET_DB
         self.spec = InstrumentSpec.from_settings(settings)
         self.sp = 1.5
         self.slip_pips = 0.5
         self.slip_dist = self.slip_pips * self.spec.pip_size
         self.stop_requested = threading.Event()
 
-        # Core components
-        self.ingestor = AurumDataIngestor(settings)
+        # Core components (no AurumDataIngestor — we read from local cache)
         self.execution = ExecutionEngine(settings)
         self.risk_mgr = RiskManager(settings)
         self.ohlcv_buffer = pd.DataFrame()
         self.features = pd.DataFrame()
         self.position = None
+        self._prev_latest_ts: pd.Timestamp | None = None
         self.trades: list[dict] = []
         self.last_signal_time = None
+        self._last_processed_ts: pd.Timestamp | None = None
+        self._paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
+        self._init_paper_db()
 
         # Load recent data
-        self._warmup()
+        self._refresh_data()
 
         print(f"D4 Paper Trader initialized")
         print(f"  Instrument: XAU/USD")
+        print(f"  Market cache: {self.market_db}")
         print(f"  Strategy: Donchian 20, BUY+SELL, 2R exit")
         print(f"  Risk: {RISK_PCT*100:.2f}% per trade")
         print(f"  Broker: paper")
         account = self.execution.broker.get_account_state()
         print(f"  Starting equity: ${account.equity:.2f}")
 
-    def _warmup(self):
-        """Load enough data to generate first signals."""
-        try:
-            raw = self.ingestor.fetch_ohlcv("M15", count=300)
-            if raw is not None and not raw.empty:
-                if "timestamp" in raw.columns:
-                    raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
-                    raw = raw.set_index("timestamp")
-                self.ohlcv_buffer = raw.tail(300).copy()
-        except Exception as exc:
-            print(f"  Warmup failed, will build incrementally: {exc}")
-            self.ohlcv_buffer = pd.DataFrame()
+    def _init_paper_db(self):
+        """Create paper_trading.sqlite3 schema if it doesn't exist."""
+        self._paper_db.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(str(self._paper_db))) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    stop_loss REAL NOT NULL,
+                    take_profit REAL NOT NULL,
+                    units INTEGER NOT NULL,
+                    r_multiple REAL,
+                    net_pnl REAL,
+                    exit_reason TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS account_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    equity REAL NOT NULL,
+                    position_count INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.commit()
 
     def _refresh_data(self):
-        """Fetch latest candles and rebuild features."""
+        """Read latest M15 candles from the forward shadow market cache."""
         try:
-            raw = self.ingestor.fetch_ohlcv("M15", count=5)
-            if raw is not None and not raw.empty:
-                if "timestamp" in raw.columns:
-                    raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
-                    raw = raw.set_index("timestamp")
-                if self.ohlcv_buffer.empty:
-                    self.ohlcv_buffer = raw
-                else:
-                    self.ohlcv_buffer = pd.concat([self.ohlcv_buffer, raw])
-                    self.ohlcv_buffer = self.ohlcv_buffer[~self.ohlcv_buffer.index.duplicated(keep="last")]
-                    self.ohlcv_buffer = self.ohlcv_buffer.tail(300)
+            if not self.market_db.exists():
+                print(f"  Market cache not found: {self.market_db}")
+                return
+
+            raw = load_ohlcv("M15", self.market_db)
+            if raw.empty:
+                print(f"  No M15 data in market cache")
+                return
+
+            if "timestamp" in raw.columns:
+                raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
+                raw = raw.set_index("timestamp")
+
+            raw = raw.sort_index()
+            new_latest = raw.index[-1]
+
+            # Only reprocess if we have new data
+            if self._prev_latest_ts is not None and new_latest <= self._prev_latest_ts:
+                return
+
+            self._prev_latest_ts = new_latest
+            self.ohlcv_buffer = raw.tail(300).copy()
 
             if len(self.ohlcv_buffer) >= LOOKBACK + 5:
                 self.features = build_research_features(self.ohlcv_buffer)
         except Exception as exc:
             print(f"  Data refresh error: {exc}")
+
+    def _persist_trade(self, trade: dict):
+        """Write a completed trade to the paper_trading SQLite database."""
+        try:
+            with closing(sqlite3.connect(str(self._paper_db))) as conn:
+                conn.execute("""
+                    INSERT INTO trades (timestamp, direction, entry_price, exit_price,
+                        stop_loss, take_profit, units, r_multiple, net_pnl, exit_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade["time"], trade["direction"],
+                    float(trade["entry"]), float(trade["exit"]),
+                    float(self.position["stop"]), float(self.position["target"]),
+                    int(self.position["units"]),
+                    float(trade["r"]), float(trade["pnl"]), trade["reason"]
+                ))
+                # Also snapshot equity
+                account = self.execution.broker.get_account_state()
+                conn.execute("""
+                    INSERT INTO account_snapshots (timestamp, equity, position_count)
+                    VALUES (?, ?, ?)
+                """, (trade["time"], account.equity, int(self.position is not None)))
+                conn.commit()
+        except Exception as exc:
+            print(f"  DB persist error: {exc}")
 
     def _check_exits(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
         """Check if current position should be closed."""
@@ -125,8 +184,10 @@ class D4PaperTrader:
             gross = self.spec.pnl(d, self.position["entry"], actual_exit, self.position["units"])
             net = gross - self.position["spread"]
             r_val = net / self.position["risk_amt"] if self.position["risk_amt"] > 0 else 0.0
-            self.trades.append({"direction": d, "entry": self.position["entry"], "exit": actual_exit,
-                "r": r_val, "pnl": net, "reason": reason, "time": ts.isoformat()})
+            trade_record = {"direction": d, "entry": self.position["entry"], "exit": actual_exit,
+                "r": r_val, "pnl": net, "reason": reason, "time": ts.isoformat()}
+            self.trades.append(trade_record)
+            self._persist_trade(trade_record)
             # Also close via execution engine for logging
             for pos in self.execution.broker.get_open_positions():
                 self.execution.broker._close_position_at_price(pos.position_id, actual_exit, reason)
@@ -203,15 +264,34 @@ class D4PaperTrader:
         self._check_entries(row, ts, bar_idx)
 
     def run_once(self):
-        """Process the latest candle (single iteration)."""
+        """Process all new candles since the last check."""
         self._refresh_data()
-        if self.ohlcv_buffer.empty or len(self.ohlcv_buffer) < 5:
+        if self.ohlcv_buffer.empty or len(self.ohlcv_buffer) < LOOKBACK + 5:
             return
 
-        last_ts = self.ohlcv_buffer.index[-1]
-        last_row = self.ohlcv_buffer.iloc[-1]
-        # Use bar_idx relative to buffer
-        self.process_candle(last_row, pd.Timestamp(last_ts), len(self.ohlcv_buffer) - 1)
+        # Determine which candles are new
+        if self._last_processed_ts is None:
+            # First run: only process the very latest completed candle
+            self._last_processed_ts = self.ohlcv_buffer.index[-2]  # leave current as incomplete
+            self.process_candle(self.ohlcv_buffer.iloc[-2], pd.Timestamp(self.ohlcv_buffer.index[-2]), len(self.ohlcv_buffer) - 2)
+        else:
+            # Process all candles newer than last processed
+            new_mask = self.ohlcv_buffer.index > self._last_processed_ts
+            new_indices = self.ohlcv_buffer.index[new_mask]
+
+            # Don't process the last index (current candle may still be forming)
+            if len(new_indices) > 1:
+                for i in range(len(new_indices) - 1):
+                    ts = new_indices[i]
+                    idx = self.ohlcv_buffer.index.get_loc(ts)
+                    try:
+                        self.process_candle(self.ohlcv_buffer.iloc[idx], pd.Timestamp(ts), idx)
+                    except Exception as exc:
+                        print(f"  Candle processing error at {ts}: {exc}")
+                self._last_processed_ts = new_indices[-2]
+            elif len(new_indices) == 1:
+                # At most 1 new bar, likely the current incomplete one — leave it
+                pass
 
     def run_loop(self, poll_seconds: float = 60.0):
         """Continuous trading loop. Polls for new candles every `poll_seconds`."""
