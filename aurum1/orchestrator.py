@@ -172,8 +172,10 @@ class Orchestrator:
             self.ingestor = AurumDataIngestor(self.settings)
             self.feature_engineer = FeatureEngineer(self.settings)
             self.regime_classifier = RegimeClassifier(self.settings)
-            self.direction_predictor = DirectionPredictor(self.settings)
-            self.sentiment_scorer = SentimentScorer(self.settings)
+            _enable_dp = bool(self.settings.get("models", {}).get("enable_direction_predictor", False))
+            self.direction_predictor = DirectionPredictor(self.settings) if _enable_dp else None
+            _enable_sent = bool(self.settings.get("models", {}).get("enable_sentiment", False))
+            self.sentiment_scorer = SentimentScorer(self.settings) if _enable_sent else None
             self.ensemble = EnsembleSignal(self.settings)
             self.state_machine = StateMachine(self.settings, mode=self.mode)
             self.risk_manager = RiskManager(self.settings)
@@ -694,10 +696,12 @@ class Orchestrator:
             logger.exception("Weekly retraining failed")
 
     def _load_deployed_models(self) -> list[_LoadedModelStatus]:
-        return [
+        statuses = [
             self._load_model_artifact(self.regime_classifier, "regime_classifier"),
-            self._load_model_artifact(self.direction_predictor, "direction_predictor"),
         ]
+        if self.direction_predictor is not None:
+            statuses.append(self._load_model_artifact(self.direction_predictor, "direction_predictor"))
+        return statuses
 
     def _load_shadow_models(self) -> None:
         if not bool(self.orchestrator_settings.get("shadow_mode", False)):
@@ -706,10 +710,12 @@ class Orchestrator:
         candidate_dir = model_dir_from_settings(self.settings) / "candidate"
         candidate_settings.setdefault("models", {})["model_dir"] = str(candidate_dir)
         self.candidate_regime_classifier = RegimeClassifier(candidate_settings)
-        self.candidate_direction_predictor = DirectionPredictor(candidate_settings)
+        _enable_dp = bool(self.settings.get("models", {}).get("enable_direction_predictor", False))
+        self.candidate_direction_predictor = DirectionPredictor(candidate_settings) if _enable_dp else None
         self.candidate_ensemble = EnsembleSignal(candidate_settings)
         self._load_model_artifact(self.candidate_regime_classifier, "regime_classifier", candidate_dir)
-        self._load_model_artifact(self.candidate_direction_predictor, "direction_predictor", candidate_dir)
+        if self.candidate_direction_predictor is not None:
+            self._load_model_artifact(self.candidate_direction_predictor, "direction_predictor", candidate_dir)
 
     def _load_model_artifact(
         self,
