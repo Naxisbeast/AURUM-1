@@ -247,6 +247,10 @@ class PaperBroker(BrokerBase):
         self._daily_pnl += net_pnl
         self._peak_equity_30d = max(self._peak_equity_30d, self._equity)
         close_time = datetime.now(UTC)
+        # Calculate R-multiple: how many times risk was won or lost
+        risk_distance = abs(float(position.open_price) - float(position.stop_loss))
+        risk_amount = risk_distance * float(position.units) * self.instrument_spec.ounces_per_unit
+        r_multiple = net_pnl / risk_amount if risk_amount > 0 else 0.0
         self._trade_history.append(
             {
                 "position_id": position_id,
@@ -256,6 +260,9 @@ class PaperBroker(BrokerBase):
                 "spread_cost": spread_cost,
                 "pnl_after_fees": net_pnl,
                 "net_pnl": net_pnl,
+                "risk_amount": risk_amount,
+                "r": r_multiple,
+                "r_multiple": r_multiple,
                 "fee_in_equity": True,
                 "direction": position.direction,
                 "entry": position.open_price,

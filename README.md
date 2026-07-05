@@ -2,7 +2,7 @@
 
 **AURUM-1** is a phased algorithmic trading system for XAU/USD (Gold) on the M15 timeframe. It provides live-capable data ingestion, feature engineering, ML model validation, signal generation, risk management, multi-broker execution, backtesting, forward shadow testing, and real-time monitoring.
 
-> **Current status**: Research & forward-shadow testing. No live capital deployed.
+> **Current status**: 🏆 **D4 paper trading live** on cloud server. Autonomous Donchian 2R BUY+SELL strategy executing real paper trades on XAUUSD M15. +$85.29 net PnL in first 3 trades.
 > See [docs/STATUS.md](docs/STATUS.md) for the latest operational state.
 
 ---
@@ -122,11 +122,32 @@ python scripts/run_backtest.py
 | [docs/forward_shadow_donchian.md](docs/forward_shadow_donchian.md) | Forward shadow runner reference |
 | [docs/forward_shadow_dashboard.md](docs/forward_shadow_dashboard.md) | Dashboard configuration guide |
 | [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md) | Pre-deployment verification checklist |
+| [docs/OBSIDIAN_EXTRACTION_PLAN.md](docs/OBSIDIAN_EXTRACTION_PLAN.md) | Obsidian vault extraction reference |
+| [docs/reports/AURUM1_RESEARCH_REPORT.md](docs/reports/AURUM1_RESEARCH_REPORT.md) | Full research compilation |
+| [docs/reports/AURUM1_SYSTEMS_AUDIT_REPORT.md](docs/reports/AURUM1_SYSTEMS_AUDIT_REPORT.md) | Systems audit report |
+| [docs/reports/AURUM1_DEPLOYMENT_SUMMARY.md](docs/reports/AURUM1_DEPLOYMENT_SUMMARY.md) | Deployment summary report |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 
 ---
 
 ## Running the System
+
+### D4 Paper Trader 🏆 (Recommended)
+
+The autonomous paper trading service runs on the cloud server and executes D4 Donchian 2R BUY+SELL trades through the PaperBroker:
+
+```bash
+# SSH to server, then:
+systemctl status aurum1-d4-paper.service
+journalctl -u aurum1-d4-paper.service -f
+
+# Check trade history
+sqlite3 /opt/aurum1/aurum1/data/paper_trading.sqlite3 \
+  "SELECT timestamp, direction, net_pnl, exit_reason FROM trades ORDER BY timestamp DESC LIMIT 10;"
+
+# Run locally (one-shot)
+python scripts/d4_paper_trader.py --run-once
+```
 
 ### Live/Paper Trading (Main Orchestrator)
 
@@ -181,17 +202,33 @@ python scripts/forward_shadow_donchian.py status
 python scripts/forward_shadow_donchian.py weekly-report
 ```
 
-### D1/D2 Shadow Variants
+### D1/D2/D3/D4/D6 Shadow Variants (Timer-Based)
 
 ```bash
-# Run D1 filtered shadow journal
-python scripts/run_phase_s5_d1_shadow_forward_journal.py
+# Run any variant's shadow journal
+python scripts/run_phase_s5_d1_shadow_forward_journal.py  # D1 filtered
+python scripts/forward_shadow_donchian_d2.py               # D2 simulation
+python scripts/forward_shadow_donchian_d2.py --json        # With JSON output
 
-# Run D2 simulation (1R exit + session/vol filter)
-python scripts/forward_shadow_donchian_d2.py
+# All variants run automatically every 15 min via systemd timers
+```
 
-# With JSON output for monitoring
-python scripts/forward_shadow_donchian_d2.py --json
+### Walk-Forward Validation
+
+```bash
+# D4 walk-forward analysis (2yr train / 6mo test sliding windows)
+python scripts/run_d4_walk_forward.py
+
+# 55-bar lookback variant (research)
+python scripts/run_55bar_walk_forward.py
+python scripts/run_20bar_walk_forward.py
+```
+
+### ML Model Retraining
+
+```bash
+# Manual retrain (runs automatically Saturdays via timer)
+python -c "from aurum1.models.retrainer import AurumRetrainer; AurumRetrainer('/opt/aurum1').retrain_all()"
 ```
 
 ### Phase Research Reports
@@ -208,11 +245,14 @@ python scripts/run_phase_s5_d1_shadow_forward_journal.py
 
 ## Strategy Variants
 
-| Variant | Entry | Exit | Filters | Trades | WR | PF |
-|---------|-------|------|---------|--------|----|----|
-| **Raw Donchian 2R** | Price > 20-bar high | Fixed 2R | None | 34 | 23.5% | 0.61 |
-| **D1 (1R + filter)** | Price > 20-bar high | Fixed 1R | No high vol, no London | 36 closed | 52.8% | 1.24 |
-| **D2 (1R + filter)** | Price > 20-bar high | Fixed 1R | No high vol, no London | 543 sim | **57.6%** | **1.33** |
+| Variant | Entry | Exit | Directions | Filters | Trades | PF | Status |
+|---------|-------|------|-----------|---------|--------|----|--------|
+| **D4** 🏆 | Price > 20-bar high / < 20-bar low | Fixed 2R | BUY+SELL | None | 8,175 | **1.14** | ✅ **Paper trading live** |
+| D6 | Price > 20-bar high / < 20-bar low | Fixed 2R | BUY+SELL | ML ensemble | 8,169 | 1.14 | 🟡 Shadow timer |
+| Raw | Price > 20-bar high | Fixed 2R | BUY only | None | 4,879 | 1.14 | 🔴 Forward shadow |
+| D2 | Price > 20-bar high | Fixed 1R | BUY only | Vol + Session | 6,890 | 1.03 | 🟡 Shadow timer |
+| D3 | Price > 20-bar high / < 20-bar low | Fixed 1R | BUY+SELL | Vol + Session | 3,544 | 1.02 | 🟡 Shadow timer |
+| D1 | Price > 20-bar high | Fixed 1R | BUY only | Vol + Session | 36 closed | 1.24 | 🟡 Shadow journal |
 
 See [docs/STRATEGIES.md](docs/STRATEGIES.md) for full details.
 
@@ -262,6 +302,8 @@ aurum1/                           # Main application package
     └── __init__.py               # MachineMode, MachineState enums
 
 scripts/                          # Run scripts and research tools
+├── d4_paper_trader.py            # 🏆 D4 autonomous paper trader
+├── run_d4_walk_forward.py        # D4 walk-forward validation
 ├── forward_shadow_donchian.py    # Raw Donchian 2R forward shadow runner
 ├── forward_shadow_donchian_d2.py # D2 filtered 1R variant
 ├── donchian_research_runner.py   # Donchian signal generation
@@ -276,11 +318,18 @@ scripts/                          # Run scripts and research tools
 ├── analyze_signal_forward_returns.py  # Forward return analysis
 
 deploy/                           # Systemd service templates
+├── aurum1-d4-paper.service       # D4 autonomous paper trader
 ├── aurum1.service.template
 ├── dashboard.service.template
 ├── forward-shadow.service.template
 ├── forward-shadow-backup.service.template
 ├── forward-shadow-weekly-report.service.template
+├── aurum1-d1-shadow.*            # Timer-based shadow services (D1-D6)
+├── aurum1-d2-shadow.*
+├── aurum1-d3-shadow.*
+├── aurum1-d4-shadow.*
+├── aurum1-d6-shadow.*
+├── aurum1-ml-retrain.*
 └── logrotate/
 
 docs/                             # Documentation
