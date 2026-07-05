@@ -1,47 +1,36 @@
-"""Parameterized D4 walk-forward: pure Donchian + BUY+SELL + 2R exit, configurable lookback."""
-import sys, math, json, argparse
-from collections import Counter
+"""Run the D4 walk-forward with LOOKBACK=55, using local data paths."""
+import sys, math, json
 from pathlib import Path
 from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 
-ROOT = Path('/opt/aurum1')
-sys.path.insert(0, str(ROOT))
+LOCAL = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(LOCAL))
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
 from scripts.research_edge_prototypes import build_research_features
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--lookback', type=int, default=20, help='Donchian channel lookback in bars')
-parser.add_argument('--output-name', type=str, default=None, help='Output filename (default: d4_walk_forward_L{lookback}_results.json)')
-parser.add_argument('--train-bars', type=int, default=33264, help='Training bars per window')
-parser.add_argument('--test-bars', type=int, default=11088, help='Test bars per window')
-parser.add_argument('--step-bars', type=int, default=11088, help='Step size between windows')
-args = parser.parse_args()
-
-LOOKBACK = args.lookback
-output_name = args.output_name or f'd4_walk_forward_L{LOOKBACK}_results.json'
-
-settings = load_settings(ROOT / 'aurum1' / 'config' / 'settings.yaml')
-spec = InstrumentSpec.from_settings(settings)
-
-ohlcv = load_ohlcv('M15', ROOT / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
-print(f'Data: {len(ohlcv)} M15 candles ({ohlcv.index[0].date()} to {ohlcv.index[-1].date()})')
-
+LOOKBACK = 55
 RISK_PCT = 0.0025
 SL_MULT = 2.0
 R_MULT = 2.0
 sp = 1.5
 slip_pips = 0.5
-slip_dist = slip_pips * float(InstrumentSpec.from_settings(load_settings(ROOT / 'aurum1' / 'config' / 'settings.yaml')).pip_size)
+
+settings = load_settings(LOCAL / 'aurum1' / 'config' / 'settings.yaml')
+spec = InstrumentSpec.from_settings(settings)
+slip_dist = slip_pips * float(spec.pip_size)
+
+ohlcv = load_ohlcv('M15', LOCAL / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
+print(f'Data: {len(ohlcv)} M15 candles ({ohlcv.index[0].date()} to {ohlcv.index[-1].date()})')
 
 features = build_research_features(ohlcv)
 
-train_bars = args.train_bars
-test_bars = args.test_bars
-step_bars = args.step_bars
+train_bars = 33264
+test_bars = 11088
+step_bars = 11088
 
 windows = []
 start = 0
@@ -147,7 +136,7 @@ for w in windows:
     m = '+' if w['sharpe'] > 0 else ' '
     print(f'  [{m}] W{w["window"]:02d}: S={w["sharpe"]:.4f} PF={w["pf"]:.4f} T={w["trades"]} R={w["return"]:.3f} DD={w["max_dd"]:.3f}')
 
-out = ROOT / 'reports' / 'forward_shadow' / output_name
+out = LOCAL / 'reports' / 'forward_shadow' / f'd4_walk_forward_L{LOOKBACK}_results.json'
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps({'windows': windows, 'summary': {'n': len(windows), 'positive': positive, 'negative': neg, 'mean_sharpe': float(np.mean(all_sharpes)), 'mean_pf': float(np.mean(all_pfs)), 'pos_window_rate': positive/len(windows) if windows else 0}, 'generated_at': datetime.now(UTC).isoformat()}, indent=2, default=str))
 print(f'\nSaved: {out}')
