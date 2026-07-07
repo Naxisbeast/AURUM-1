@@ -199,34 +199,49 @@ class D4PaperTrader:
             return
         try:
             with closing(sqlite3.connect(str(self._paper_db))) as conn:
+                # Probe schema for old-style timestamp column
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)").fetchall()]
+                has_old_timestamp = "timestamp" in cols
+
                 # 1. Restore trades into broker's trade history
-                rows = conn.execute(
-                    "SELECT entry_time, exit_time, direction, entry_price, exit_price, "
-                    "stop_loss, take_profit, units, risk_amount, r_multiple, net_pnl, "
-                    "spread_cost, slippage_cost, exit_reason FROM trades "
-                    "ORDER BY id"
-                ).fetchall()
+                if has_old_timestamp:
+                    rows = conn.execute(
+                        "SELECT timestamp, entry_time, exit_time, direction, entry_price, "
+                        "exit_price, stop_loss, take_profit, units, risk_amount, r_multiple, "
+                        "net_pnl, spread_cost, slippage_cost, exit_reason FROM trades "
+                        "ORDER BY id"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT entry_time, exit_time, direction, entry_price, exit_price, "
+                        "stop_loss, take_profit, units, risk_amount, r_multiple, net_pnl, "
+                        "spread_cost, slippage_cost, exit_reason FROM trades "
+                        "ORDER BY id"
+                    ).fetchall()
+                # When has_old_timestamp, SELECT has a leading timestamp column
+                # that shifts all column indices by 1
+                off = 1 if has_old_timestamp else 0
                 for row in rows:
                     trade = {
-                        "open_time": row[0] or "",
-                        "closed_at": row[1] or "",
-                        "direction": row[2],
-                        "entry": row[3],
-                        "actual_entry": row[3],
-                        "exit": row[4] or 0.0,
-                        "actual_exit": row[4] or 0.0,
-                        "stop_loss": row[5],
-                        "take_profit": row[6],
-                        "units": row[7],
-                        "risk_amount": row[8] or 0.0,
-                        "r": row[9] or 0.0,
-                        "r_multiple": row[9] or 0.0,
-                        "net_pnl": row[10] or 0.0,
-                        "pnl": row[10] or 0.0,
-                        "pnl_after_fees": row[10] or 0.0,
-                        "spread_cost": row[11] or 0.0,
-                        "total_slippage_cost": row[12] or 0.0,
-                        "reason": row[13] or "",
+                        "open_time": row[0 + off] or "",
+                        "closed_at": row[1 + off] or "",
+                        "direction": row[2 + off],
+                        "entry": row[3 + off],
+                        "actual_entry": row[3 + off],
+                        "exit": row[4 + off] or 0.0,
+                        "actual_exit": row[4 + off] or 0.0,
+                        "stop_loss": row[5 + off],
+                        "take_profit": row[6 + off],
+                        "units": row[7 + off],
+                        "risk_amount": row[8 + off] or 0.0,
+                        "r": row[9 + off] or 0.0,
+                        "r_multiple": row[9 + off] or 0.0,
+                        "net_pnl": row[10 + off] or 0.0,
+                        "pnl": row[10 + off] or 0.0,
+                        "pnl_after_fees": row[10 + off] or 0.0,
+                        "spread_cost": row[11 + off] or 0.0,
+                        "total_slippage_cost": row[12 + off] or 0.0,
+                        "reason": row[13 + off] or "",
                     }
                     self.trades.append(trade)
                     self.execution.broker._trade_history.append(trade)
@@ -358,7 +373,7 @@ class D4PaperTrader:
                 conn.execute("DELETE FROM open_positions")
                 conn.commit()
         except Exception as exc:
-            pass
+            print(f"  Clear-positions error: {exc}")
 
     def _save_last_processed_ts(self, ts: pd.Timestamp):
         """Persist last processed timestamp so restart resumes correctly."""
@@ -483,30 +498,61 @@ class D4PaperTrader:
             pnl = float(trade.get("pnl", trade.get("net_pnl", 0)))
             spread = float(trade.get("spread_cost", trade.get("fee", 0)))
             slip = float(trade.get("total_slippage_cost", 0))
+            entry_ts = trade.get("open_time", "")
+            exit_ts = trade.get("closed_at", "")
 
             with closing(sqlite3.connect(str(self._paper_db))) as conn:
-                conn.execute("""
-                    INSERT INTO trades
-                        (entry_time, exit_time, direction, entry_price, exit_price,
-                         stop_loss, take_profit, units, risk_amount, r_multiple,
-                         net_pnl, spread_cost, slippage_cost, exit_reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    trade.get("open_time", ""),
-                    trade.get("closed_at", ""),
-                    trade["direction"],
-                    float(trade.get("entry", trade.get("actual_entry", 0))),
-                    float(trade.get("exit", trade.get("actual_exit", 0))),
-                    float(trade.get("stop_loss", 0)),
-                    float(trade.get("take_profit", 0)),
-                    int(trade.get("units", 1)),
-                    round(risk_amt, 2) if risk_amt else None,
-                    round(r_val, 4),
-                    round(pnl, 2),
-                    round(spread, 2),
-                    round(slip, 2),
-                    trade["reason"]
-                ))
+                # Probe schema: if the old `timestamp` column exists, include it
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(trades)").fetchall()]
+                has_old_timestamp = "timestamp" in cols
+
+                if has_old_timestamp:
+                    conn.execute("""
+                        INSERT INTO trades
+                            (timestamp, entry_time, exit_time, direction, entry_price,
+                             exit_price, stop_loss, take_profit, units, risk_amount,
+                             r_multiple, net_pnl, spread_cost, slippage_cost, exit_reason)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        entry_ts or exit_ts,  # populate old timestamp column
+                        entry_ts,
+                        exit_ts,
+                        trade["direction"],
+                        float(trade.get("entry", trade.get("actual_entry", 0))),
+                        float(trade.get("exit", trade.get("actual_exit", 0))),
+                        float(trade.get("stop_loss", 0)),
+                        float(trade.get("take_profit", 0)),
+                        int(trade.get("units", 1)),
+                        round(risk_amt, 2) if risk_amt else None,
+                        round(r_val, 4),
+                        round(pnl, 2),
+                        round(spread, 2),
+                        round(slip, 2),
+                        trade["reason"]
+                    ))
+                else:
+                    conn.execute("""
+                        INSERT INTO trades
+                            (entry_time, exit_time, direction, entry_price, exit_price,
+                             stop_loss, take_profit, units, risk_amount, r_multiple,
+                             net_pnl, spread_cost, slippage_cost, exit_reason)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        entry_ts,
+                        exit_ts,
+                        trade["direction"],
+                        float(trade.get("entry", trade.get("actual_entry", 0))),
+                        float(trade.get("exit", trade.get("actual_exit", 0))),
+                        float(trade.get("stop_loss", 0)),
+                        float(trade.get("take_profit", 0)),
+                        int(trade.get("units", 1)),
+                        round(risk_amt, 2) if risk_amt else None,
+                        round(r_val, 4),
+                        round(pnl, 2),
+                        round(spread, 2),
+                        round(slip, 2),
+                        trade["reason"]
+                    ))
                 conn.commit()
         except Exception as exc:
             print(f"  DB persist error: {exc}")
@@ -579,26 +625,27 @@ class D4PaperTrader:
             direction = "BUY"
             entry_price = float(row["open"]) + self.slip_dist
             stop_loss = entry_price - 2.0 * atr
-            self._signals_seen += 1
         elif close < low_20 and math.isfinite(low_20):
             direction = "SELL"
             entry_price = float(row["open"]) - self.slip_dist
             stop_loss = entry_price + 2.0 * atr
-            self._signals_seen += 1
 
         if direction is None or stop_loss is None:
             return
         if (direction == "BUY" and stop_loss >= entry_price) or (direction == "SELL" and stop_loss <= entry_price):
             return
 
-        risk_dist = abs(entry_price - stop_loss)
-        take_profit = entry_price + 2.0 * risk_dist if direction == "BUY" else entry_price - 2.0 * risk_dist
+        # Risk distance from raw signal prices (before slippage), matching walk-forward
+        raw_entry = float(row["open"])
+        raw_stop = raw_entry - 2.0 * atr if direction == "BUY" else raw_entry + 2.0 * atr
+        risk_dist = abs(raw_entry - raw_stop)
+        take_profit = raw_entry + 2.0 * risk_dist if direction == "BUY" else raw_entry - 2.0 * risk_dist
 
         # Route through risk manager and execution engine
         account = self.execution.broker.get_account_state()
         current_spread = account.current_spread_pips
         self._spread_history.append(current_spread)
-        self._signals_seen += 1
+        self._signals_seen += 0  # already incremented above, this is a no-op placeholder
 
         instruction = TradeInstruction(
             timestamp=ts.to_pydatetime(), direction=direction, entry_price=entry_price,
