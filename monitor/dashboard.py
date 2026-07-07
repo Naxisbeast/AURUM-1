@@ -256,46 +256,76 @@ def render_refresh_timer(refresh_interval: int) -> None:
 
 def load_trade_log(db_path: str) -> pd.DataFrame:
     path = Path(db_path)
-    if not path.exists():
-        return empty_trade_frame()
-    with closing(sqlite3.connect(path)) as conn:
-        try:
-            raw = pd.read_sql_query(
-                "SELECT timestamp, direction, price, size, sl, tp, order_id, status, payload_json FROM trades_log ORDER BY timestamp",
-                conn,
-            )
-        except (sqlite3.Error, pd.errors.DatabaseError):
-            return empty_trade_frame()
-    if raw.empty:
-        return empty_trade_frame()
-    rows = []
-    for item in raw.to_dict(orient="records"):
-        payload = _json_payload(item.get("payload_json"))
-        risk_order = payload.get("risk_order", {}) if isinstance(payload.get("risk_order"), dict) else {}
-        instruction = risk_order.get("instruction", {}) if isinstance(risk_order.get("instruction"), dict) else {}
-        raw_response = payload.get("raw_response", {}) if isinstance(payload.get("raw_response"), dict) else {}
-        pnl = raw_response.get("pnl", payload.get("pnl"))
-        entry = instruction.get("entry_price", item.get("price"))
-        risk_amount = risk_order.get("risk_amount")
-        rows.append(
-            {
-                "timestamp": item.get("timestamp"),
-                "direction": item.get("direction"),
-                "entry": entry,
-                "exit_current": item.get("price"),
-                "pnl": pnl if pnl is not None else 0.0,
-                "lot_size": item.get("size"),
-                "status": item.get("status"),
-                "regime": instruction.get("regime"),
-                "signal_score": instruction.get("signal_score"),
-                "rejection_reason": payload.get("rejection_reason") or raw_response.get("reason"),
-                "rr": (float(pnl) / float(risk_amount)) if pnl is not None and risk_amount not in (None, 0, "0") else None,
-                "payload": payload,
-            }
-        )
-    frame = pd.DataFrame(rows)
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    return frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    paper_db = path.parent / "paper_trading.sqlite3"
+
+    # Try primary DB first
+    if path.exists():
+        with closing(sqlite3.connect(path)) as conn:
+            try:
+                raw = pd.read_sql_query(
+                    "SELECT timestamp, direction, price, size, sl, tp, order_id, status, payload_json FROM trades_log ORDER BY timestamp",
+                    conn,
+                )
+            except (sqlite3.Error, pd.errors.DatabaseError):
+                raw = pd.DataFrame()
+        if not raw.empty:
+            rows = []
+            for item in raw.to_dict(orient="records"):
+                payload = _json_payload(item.get("payload_json"))
+                risk_order = payload.get("risk_order", {}) if isinstance(payload.get("risk_order"), dict) else {}
+                instruction = risk_order.get("instruction", {}) if isinstance(risk_order.get("instruction"), dict) else {}
+                raw_response = payload.get("raw_response", {}) if isinstance(payload.get("raw_response"), dict) else {}
+                pnl = raw_response.get("pnl", payload.get("pnl"))
+                entry = instruction.get("entry_price", item.get("price"))
+                risk_amount = risk_order.get("risk_amount")
+                rows.append(
+                    {
+                        "timestamp": item.get("timestamp"),
+                        "direction": item.get("direction"),
+                        "entry": entry,
+                        "exit_current": item.get("price"),
+                        "pnl": pnl if pnl is not None else 0.0,
+                        "lot_size": item.get("size"),
+                        "status": item.get("status"),
+                        "regime": instruction.get("regime"),
+                        "signal_score": instruction.get("signal_score"),
+                        "rejection_reason": payload.get("rejection_reason") or raw_response.get("reason"),
+                        "rr": (float(pnl) / float(risk_amount)) if pnl is not None and risk_amount not in (None, 0, "0") else None,
+                        "payload": payload,
+                    }
+                )
+            frame = pd.DataFrame(rows)
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+            return frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+    # Fallback: paper_trading trades table
+    if paper_db.exists():
+        with closing(sqlite3.connect(paper_db)) as conn:
+            try:
+                raw = pd.read_sql_query(
+                    "SELECT exit_time as timestamp, direction, entry_price, exit_price, "
+                    "r_multiple, net_pnl, exit_reason FROM trades ORDER BY exit_time",
+                    conn,
+                )
+            except (sqlite3.Error, pd.errors.DatabaseError):
+                raw = pd.DataFrame()
+        if not raw.empty:
+            raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce")
+            raw["pnl"] = pd.to_numeric(raw["net_pnl"], errors="coerce").fillna(0.0)
+            raw["entry"] = raw["entry_price"]
+            raw["exit_current"] = raw["exit_price"]
+            raw["rr"] = pd.to_numeric(raw["r_multiple"], errors="coerce")
+            raw["rejection_reason"] = raw["exit_reason"]
+            raw["lot_size"] = 0.0
+            raw["status"] = "closed"
+            raw["regime"] = ""
+            raw["signal_score"] = 0.0
+            raw["payload"] = ""
+            cols = ["timestamp", "direction", "entry", "exit_current", "pnl", "lot_size",
+                    "status", "regime", "signal_score", "rejection_reason", "rr", "payload"]
+            return raw[cols].dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+    return empty_trade_frame()
 
 
 def load_event_log(db_path: str) -> pd.DataFrame:
