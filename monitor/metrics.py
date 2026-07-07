@@ -16,36 +16,52 @@ from aurum1.execution import PaperBroker
 
 
 def load_equity_curve(db_path: str) -> pd.DataFrame:
-    """Load timestamp/equity rows from performance_log sorted ascending."""
+    """Load timestamp/equity rows from performance_log, falling back to paper_trading account_snapshots."""
 
     path = Path(db_path)
-    if not path.exists():
-        return pd.DataFrame(columns=["timestamp", "equity"])
-    with closing(sqlite3.connect(path)) as conn:
-        try:
-            raw = pd.read_sql_query(
-                "SELECT timestamp, metric_name, metric_value, payload_json FROM performance_log",
-                conn,
-            )
-        except (sqlite3.Error, pd.errors.DatabaseError):
-            return pd.DataFrame(columns=["timestamp", "equity"])
-    if raw.empty:
-        return pd.DataFrame(columns=["timestamp", "equity"])
 
-    rows: list[dict[str, Any]] = []
-    for record in raw.to_dict(orient="records"):
-        equity = _equity_from_record(record)
-        if equity is None:
-            continue
-        rows.append({"timestamp": record.get("timestamp"), "equity": equity})
-    if not rows:
-        return pd.DataFrame(columns=["timestamp", "equity"])
+    # Primary source: performance_log (legacy)
+    if path.exists():
+        with closing(sqlite3.connect(path)) as conn:
+            try:
+                raw = pd.read_sql_query(
+                    "SELECT timestamp, metric_name, metric_value, payload_json FROM performance_log",
+                    conn,
+                )
+            except (sqlite3.Error, pd.errors.DatabaseError):
+                raw = pd.DataFrame()
+        if not raw.empty:
+            rows: list[dict[str, Any]] = []
+            for record in raw.to_dict(orient="records"):
+                equity = _equity_from_record(record)
+                if equity is None:
+                    continue
+                rows.append({"timestamp": record.get("timestamp"), "equity": equity})
+            if rows:
+                frame = pd.DataFrame(rows)
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+                frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
+                frame = frame.dropna(subset=["timestamp", "equity"])
+                return frame.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
 
-    frame = pd.DataFrame(rows)
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    frame["equity"] = pd.to_numeric(frame["equity"], errors="coerce")
-    frame = frame.dropna(subset=["timestamp", "equity"])
-    return frame.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    # Fallback: paper_trading account_snapshots (D4 paper trader)
+    paper_db = path.parent / "paper_trading.sqlite3"
+    if paper_db.exists():
+        with closing(sqlite3.connect(paper_db)) as conn:
+            try:
+                raw = pd.read_sql_query(
+                    "SELECT timestamp, equity FROM account_snapshots ORDER BY timestamp",
+                    conn,
+                )
+            except (sqlite3.Error, pd.errors.DatabaseError):
+                raw = pd.DataFrame()
+        if not raw.empty:
+            raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce")
+            raw["equity"] = pd.to_numeric(raw["equity"], errors="coerce")
+            raw = raw.dropna(subset=["timestamp", "equity"])
+            return raw.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+
+    return pd.DataFrame(columns=["timestamp", "equity"])
 
 
 def compute_rolling_sharpe(
@@ -137,13 +153,22 @@ def get_system_status(
     open_positions = 0
     peak_equity = equity
     spread = float(settings.get("execution", {}).get("paper_spread_pips", 0.0))
-    if paper_broker is not None:
-        account = paper_broker.get_account_state()
-        equity = float(account.equity)
-        daily_pnl = float(account.daily_pnl)
-        open_positions = int(account.open_trade_count)
-        peak_equity = float(account.peak_equity_30d)
-        spread = float(account.current_spread_pips)
+
+    # Try reading from paper_trading account_snapshots first (avoids mutating broker state)
+    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    if paper_db.exists():
+        with closing(sqlite3.connect(paper_db)) as conn:
+            try:
+                row = conn.execute(
+                    "SELECT equity, daily_pnl, peak_equity, position_count FROM account_snapshots ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    equity = float(row[0])
+                    daily_pnl = float(row[1]) if row[1] else 0.0
+                    peak_equity = float(row[2]) if row[2] else equity
+                    open_positions = int(row[3]) if row[3] else 0
+            except sqlite3.Error:
+                pass
 
     last_candle = _last_timestamp_from_tables(db_path)
     daily_kill = daily_pnl < -(equity * float(risk_settings.get("daily_loss_kill_pct", 0.03)))

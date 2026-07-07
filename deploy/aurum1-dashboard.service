@@ -1,0 +1,21 @@
+[Unit]
+Description=AURUM-1 Dashboard — Streamlit live monitor
+After=network-online.target aurum1-forward-shadow.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aurum1
+ExecStart=/opt/aurum1/.venv/bin/python -m streamlit run /opt/aurum1/monitor/dashboard.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+Restart=on-failure
+RestartSec=10
+User=aurum1
+Group=aurum1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/aurum1/logs /opt/aurum1/reports /opt/aurum1/backups /opt/aurum1/aurum1/data
+
+[Install]
+WantedBy=multi-user.target
