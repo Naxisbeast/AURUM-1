@@ -22,7 +22,6 @@ if str(ROOT) not in sys.path:
 import streamlit as st
 
 from aurum1.data.ingestion import load_settings
-from aurum1.execution import PaperBroker
 from monitor.metrics import (
     compute_drawdown_curve,
     compute_rolling_profit_factor,
@@ -41,17 +40,17 @@ def main() -> None:
     window_days = int(monitor_settings.get("rolling_window_days", 30))
     max_rows = int(monitor_settings.get("equity_chart_max_rows", 10000))
 
-    paper_broker = PaperBroker(settings) if bool(settings.get("broker", {}).get("paper_trade", True)) else None
     equity_curve = load_equity_curve(db_path).tail(max_rows)
     trades = load_trade_log(db_path)
     events = load_event_log(db_path)
-    status = get_system_status(db_path, paper_broker, settings)
+    status = get_system_status(db_path, None, settings)
 
     st.title("AURUM-1 Live Monitor")
     render_status_bar(status)
     render_equity_curve(equity_curve, settings)
+    render_trade_chart(equity_curve, trades, settings)
     render_rolling_metrics(equity_curve, trades, window_days)
-    render_open_positions(paper_broker)
+    render_open_positions(db_path)
     render_signal_monitor(trades, events, status)
     render_trade_log(trades)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
@@ -69,17 +68,17 @@ def render_status_bar(status: dict[str, Any]) -> None:
     st.markdown(
         f"""
         <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;
-                    padding:12px 14px;border:1px solid #e5e7eb;border-radius:8px;
-                    background:#f8fafc;margin-bottom:12px;">
+                    padding:12px 14px;border:1px solid #334155;border-radius:8px;
+                    background:var(--secondary-background-color, #1e293b);margin-bottom:12px;">
           <strong style="color:{color};">● {mode}</strong>
           <span>Last candle processed: <strong>{last_candle}</strong></span>
           <span>Open positions: <strong>{status.get("open_positions", 0)}</strong></span>
           <span>Current equity: <strong>${float(status.get("equity", 0.0)):,.2f}</strong></span>
           <span>Today P&amp;L: <strong style="color:{pnl_color};">${daily_pnl:,.2f} ({float(status.get("daily_pnl_pct", 0.0)):.2%})</strong></span>
           <span>Active mode: <strong>{status.get("active_mode", "RULE_REGIME")}</strong></span>
-          <span>Blackout: <strong style="color:{'#dc2626' if blackout == 'YES' else '#111827'};">{blackout}</strong></span>
-          <span>Daily kill switch: <strong style="color:{'#dc2626' if daily_kill == 'TRIGGERED' else '#111827'};">{daily_kill}</strong></span>
-          <span>Total drawdown kill: <strong style="color:{'#dc2626' if dd_kill == 'TRIGGERED' else '#111827'};">{dd_kill}</strong></span>
+          <span>Blackout: <strong style="color:{'#f87171' if blackout == 'YES' else 'inherit'};">{blackout}</strong></span>
+          <span>Daily kill switch: <strong style="color:{'#f87171' if daily_kill == 'TRIGGERED' else 'inherit'};">{daily_kill}</strong></span>
+          <span>Total drawdown kill: <strong style="color:{'#f87171' if dd_kill == 'TRIGGERED' else 'inherit'};">{dd_kill}</strong></span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -110,6 +109,102 @@ def render_equity_curve(equity_curve: pd.DataFrame, settings: dict[str, Any]) ->
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_trade_chart(equity_curve: pd.DataFrame, trades: pd.DataFrame, settings: dict[str, Any]) -> None:
+    """Show trades on a price line chart with entry→exit arrows."""
+    st.subheader("Trade Chart — All Entries & Exits")
+    if trades.empty and equity_curve.empty:
+        st.info("No equity or trade data yet.")
+        return
+
+    fig = go.Figure()
+
+    # Equity curve as thin background reference
+    if not equity_curve.empty:
+        fig.add_trace(go.Scatter(
+            x=equity_curve["timestamp"], y=equity_curve["equity"],
+            mode="lines", name="Equity ($)",
+            line=dict(color="rgba(79, 138, 245, 0.4)", width=1),
+        ))
+
+    # Plot each trade: entry marker + exit marker + connecting line
+    if not trades.empty:
+        for _, t in trades.iterrows():
+            ts = t.get("timestamp")
+            pnl = float(t.get("pnl", 0))
+            direction = str(t.get("direction", ""))
+            entry = float(t.get("entry", 0))
+            exit_p = float(t.get("exit_current", 0))
+            reason = str(t.get("rejection_reason", ""))
+            rr = float(t.get("rr", 0)) if t.get("rr") else 0
+
+            if entry <= 0 or exit_p <= 0:
+                continue
+
+            # Color and shape
+            is_win = pnl > 0
+            if direction == "BUY":
+                entry_symbol = "triangle-up"
+                exit_symbol = "diamond"
+            else:
+                entry_symbol = "triangle-down"
+                exit_symbol = "diamond"
+            color = "#22c55e" if is_win else "#ef4444"
+            label = "WIN" if is_win else "LOSS"
+
+            # Entry marker at entry price, exit marker at exit price, connected by line
+            # Align trade with equity curve by picking the equity value at the same time
+            eq_val_at_entry = None
+            if not equity_curve.empty:
+                eq_ts = pd.to_datetime(equity_curve["timestamp"], utc=True)
+                trade_ts = pd.Timestamp(ts).tz_convert("UTC") if pd.notna(ts) else None
+                if trade_ts:
+                    closest = (eq_ts - trade_ts).abs().idxmin()
+                    eq_val_at_entry = float(equity_curve.iloc[closest]["equity"])
+
+            if eq_val_at_entry:
+                y_val = eq_val_at_entry
+            else:
+                y_val = 10000 + (pnl * 5)  # fallback: map PnL to equity-like scale
+
+            hover = (
+                f"{'🟢' if is_win else '🔴'} {direction} {label}<br>"
+                f"Entry: ${entry:.2f} → Exit: ${exit_p:.2f}<br>"
+                f"R: {rr:+.2f} | PnL: ${pnl:+.2f}<br>"
+                f"{'TP' if 'profit' in reason else 'SL' if 'stop' in reason else reason}"
+            )
+
+            # Connecting line from entry time to exit time
+            fig.add_trace(go.Scatter(
+                x=[ts, ts],
+                y=[y_val - 10, y_val + 10],
+                mode="lines",
+                line=dict(color=color, width=3),
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+
+            # Marker on the equity curve
+            fig.add_trace(go.Scatter(
+                x=[ts], y=[y_val],
+                mode="markers",
+                marker=dict(symbol=entry_symbol, size=14, color=color, line=dict(color="white", width=1.5)),
+                name=hover,
+                hovertext=hover,
+                hoverinfo="text",
+                showlegend=False,
+            ))
+
+    fig.update_layout(
+        height=400, margin=dict(l=20, r=20, t=30, b=30),
+        yaxis_title="Equity ($)",
+        hovermode="closest",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_xaxes(gridcolor="#334155")
+    fig.update_yaxes(gridcolor="#334155")
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_rolling_metrics(equity_curve: pd.DataFrame, trades: pd.DataFrame, window_days: int) -> None:
     st.subheader("Rolling Performance Metrics")
     sharpe = compute_rolling_sharpe(equity_curve, window_days)
@@ -134,32 +229,39 @@ def render_rolling_metrics(equity_curve: pd.DataFrame, trades: pd.DataFrame, win
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_open_positions(paper_broker: PaperBroker | None) -> None:
+def render_open_positions(db_path: str) -> None:
+    """Read open positions from paper_trading DB (no broker creation)."""
     st.subheader("Open Positions")
-    positions = [] if paper_broker is None else paper_broker.get_open_positions()
-    if not positions:
+    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    if not paper_db.exists():
         st.info("No open positions")
         return
-    now = datetime.now(UTC)
-    frame = pd.DataFrame(
-        [
-            {
-                "Position ID": item.position_id,
-                "Direction": item.direction,
-                "Entry Price": item.open_price,
-                "Current Price": item.current_price,
-                "Unrealised P&L": item.unrealised_pnl,
-                "Stop Loss": item.stop_loss,
-                "Take Profit": item.take_profit,
-                "Open Time": item.open_time.isoformat(),
-                "Duration": str(now - item.open_time),
-                "ATR at Entry": None,
-                "Regime": None,
-            }
-            for item in positions
-        ]
-    )
-    st.dataframe(frame.style.apply(_position_row_style, axis=1), use_container_width=True, hide_index=True)
+    try:
+        with closing(sqlite3.connect(paper_db)) as conn:
+            rows = conn.execute(
+                "SELECT direction, entry_price, current_price, stop_loss, take_profit, "
+                "units, lot_size, entry_slippage, open_time FROM open_positions ORDER BY id"
+            ).fetchall()
+        if not rows:
+            st.info("No open positions")
+            return
+        frame = pd.DataFrame(
+            [
+                {
+                    "Direction": "🟢 BUY" if row[0] == "BUY" else "🔴 SELL",
+                    "Entry": round(row[1], 2),
+                    "Current": round(row[2], 2),
+                    "Stop Loss": round(row[3], 2),
+                    "Take Profit": round(row[4], 2),
+                    "Units": row[5],
+                    "Open Time": row[8][:19] if row[8] else "-",
+                }
+                for row in rows
+            ]
+        )
+        st.dataframe(frame, use_container_width=True, hide_index=True)
+    except Exception:
+        st.info("No open positions")
 
 
 def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: dict[str, Any]) -> None:
@@ -225,19 +327,35 @@ def render_trade_log(trades: pd.DataFrame) -> None:
     if regime != "ALL":
         shown = shown[shown["regime"] == regime]
 
-    columns = [
-        "timestamp",
-        "direction",
-        "entry",
-        "exit_current",
-        "pnl",
-        "lot_size",
-        "status",
-        "regime",
-        "signal_score",
-        "rejection_reason",
-    ]
-    st.dataframe(shown[columns], use_container_width=True, hide_index=True, height=420)
+    # Format R-multiple with color
+    def _color_r(val):
+        try:
+            v = float(val)
+            color = "#22c55e" if v > 0 else "#ef4444" if v < 0 else "inherit"
+            return f"color: {color}; font-weight: bold"
+        except (ValueError, TypeError):
+            return ""
+
+    shown["R"] = pd.to_numeric(shown["rr"], errors="coerce")
+    shown["Result"] = shown.apply(
+        lambda r: "✅ WIN" if float(r.get("pnl", 0)) > 0 else "❌ LOSS", axis=1
+    )
+    shown["Entry $"] = shown["entry"].apply(lambda x: f"${x:.2f}" if x else "-")
+    shown["Exit $"] = shown["exit_current"].apply(lambda x: f"${x:.2f}" if x else "-")
+    shown["PnL $"] = shown["pnl"].apply(lambda x: f"${x:+.2f}")
+    shown["Time"] = shown["timestamp"].dt.strftime("%m/%d %H:%M")
+
+    display_cols = ["Time", "direction", "Entry $", "Exit $", "R", "PnL $", "Result", "rejection_reason"]
+    display_map = {
+        "Time": "Time", "direction": "Dir", "Entry $": "Entry",
+        "Exit $": "Exit", "R": "R", "PnL $": "PnL",
+        "Result": "", "rejection_reason": "Reason"
+    }
+    try:
+        styled = shown[display_cols].rename(columns=display_map).style.map(_color_r, subset=["R"])
+    except AttributeError:
+        styled = shown[display_cols].rename(columns=display_map).style.applymap(_color_r, subset=["R"])
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
     pnl = pd.to_numeric(shown["pnl"], errors="coerce").fillna(0.0)
     wins = int((pnl > 0.0).sum())
     total = len(shown)
@@ -258,7 +376,34 @@ def load_trade_log(db_path: str) -> pd.DataFrame:
     path = Path(db_path)
     paper_db = path.parent / "paper_trading.sqlite3"
 
-    # Try primary DB first
+    # Try paper_trading first (has actual trade data)
+    if paper_db.exists():
+        with closing(sqlite3.connect(paper_db)) as conn:
+            try:
+                raw = pd.read_sql_query(
+                    "SELECT exit_time as timestamp, direction, entry_price, exit_price, "
+                    "r_multiple, net_pnl, exit_reason FROM trades ORDER BY exit_time",
+                    conn,
+                )
+            except (sqlite3.Error, pd.errors.DatabaseError):
+                raw = pd.DataFrame()
+        if not raw.empty:
+            raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce")
+            raw["pnl"] = pd.to_numeric(raw["net_pnl"], errors="coerce").fillna(0.0)
+            raw["entry"] = raw["entry_price"]
+            raw["exit_current"] = raw["exit_price"]
+            raw["rr"] = pd.to_numeric(raw["r_multiple"], errors="coerce")
+            raw["rejection_reason"] = raw["exit_reason"]
+            raw["lot_size"] = 0.0
+            raw["status"] = "closed"
+            raw["regime"] = ""
+            raw["signal_score"] = 0.0
+            raw["payload"] = ""
+            cols = ["timestamp", "direction", "entry", "exit_current", "pnl", "lot_size",
+                    "status", "regime", "signal_score", "rejection_reason", "rr", "payload"]
+            return raw[cols].dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+    # Fallback: legacy aurum1 trades_log
     if path.exists():
         with closing(sqlite3.connect(path)) as conn:
             try:
@@ -297,33 +442,6 @@ def load_trade_log(db_path: str) -> pd.DataFrame:
             frame = pd.DataFrame(rows)
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
             return frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-
-    # Fallback: paper_trading trades table
-    if paper_db.exists():
-        with closing(sqlite3.connect(paper_db)) as conn:
-            try:
-                raw = pd.read_sql_query(
-                    "SELECT exit_time as timestamp, direction, entry_price, exit_price, "
-                    "r_multiple, net_pnl, exit_reason FROM trades ORDER BY exit_time",
-                    conn,
-                )
-            except (sqlite3.Error, pd.errors.DatabaseError):
-                raw = pd.DataFrame()
-        if not raw.empty:
-            raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce")
-            raw["pnl"] = pd.to_numeric(raw["net_pnl"], errors="coerce").fillna(0.0)
-            raw["entry"] = raw["entry_price"]
-            raw["exit_current"] = raw["exit_price"]
-            raw["rr"] = pd.to_numeric(raw["r_multiple"], errors="coerce")
-            raw["rejection_reason"] = raw["exit_reason"]
-            raw["lot_size"] = 0.0
-            raw["status"] = "closed"
-            raw["regime"] = ""
-            raw["signal_score"] = 0.0
-            raw["payload"] = ""
-            cols = ["timestamp", "direction", "entry", "exit_current", "pnl", "lot_size",
-                    "status", "regime", "signal_score", "rejection_reason", "rr", "payload"]
-            return raw[cols].dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     return empty_trade_frame()
 
