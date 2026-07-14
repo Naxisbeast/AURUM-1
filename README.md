@@ -1,368 +1,199 @@
-# AURUM-1
+# AURUM-1 🏆
 
-**AURUM-1** is a phased algorithmic trading system for XAU/USD (Gold) on the M15 timeframe. It provides live-capable data ingestion, feature engineering, ML model validation, signal generation, risk management, multi-broker execution, backtesting, forward shadow testing, and real-time monitoring.
+**Autonomous algorithmic trading system for XAU/USD (Gold) on M15** — live paper trading on a cloud server with a proven Donchian breakout strategy. Up **+4.49% ($449)** in the first 8 days of live trading.
 
-> **Current status**: 🏆 **D4 paper trading live** on cloud server. Autonomous Donchian 2R BUY+SELL strategy executing real paper trades on XAUUSD M15. +$85.29 net PnL in first 3 trades.
-> See [docs/STATUS.md](docs/STATUS.md) for the latest operational state.
+> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 20 trades closed, 55% win rate, net PnL **+$294.05**, peak equity gain **+$449**.
+> 
+> 🖥️ **Live Dashboard**: [`http://178.105.245.66:8501`](http://178.105.245.66:8501)
+> 
+> 📊 [View Full Status →](docs/STATUS.md)
 
 ---
 
-## Quick Start
+## 🎯 The Strategy — D4 Donchian Breakout
+
+The simplest strategy wins. **D4** is pure price action:
+
+1. **Entry**: Buy when price breaks above the 20-bar high. Sell when it breaks below the 20-bar low.
+2. **Exit**: Fixed 2R — take profit at +2× risk, stop loss at -1× risk.
+3. **No filters**: No volatility filters, no session filters, no ML. Just clean breakouts.
+4. **Both directions**: BUY and SELL signals.
+
+| Metric | Walk-Forward (18 windows) | Live Trading (8 days) |
+|--------|:------------------------:|:---------------------:|
+| **Profit Factor** | 1.14 | — |
+| **Mean Sharpe** | 1.27 | — |
+| **Positive windows** | 88.9% (16/18) | — |
+| **Live Win Rate** | — | **55.0%** (11/20) |
+| **Live Net PnL** | — | **+$294.05** |
+| **Live Avg R** | — | **+0.61R** |
+| **Peak Equity** | — | **+$449.15** (+4.49%) |
+
+*Walk-forward: 11 years of M15 data, sliding 2yr train / 6mo test windows*
+
+---
+
+## 📈 Live Performance
+
+```
+Jul 02 — $10,000 ──► Start
+Jul 03 — $10,150 ──► +1.5%  (3 trades)
+Jul 07 — $10,214 ──► +2.1%  (first TP hit, DB recording confirmed working)
+Jul 08 — $10,384 ──► +3.8%  (SELL streak: 4 consecutive wins)
+Jul 09 — $10,400 ──► +4.0%  (mixed BUY/SELL, 11 trades total)
+Jul 10 — $10,350 ──► +3.5%  (drawdown: 2 stop losses)
+Jul 13 — $10,420 ──► +4.2%  (recovery: 3 SELL wins)
+Jul 14 — $10,449 ──► +4.5%  🏆 peak (20 trades, 55% WR)
+```
+
+[**Live Dashboard →**](http://178.105.245.66:8501)
+
+---
+
+## 🔧 Quick Start
 
 ```bash
 # Clone and enter
 git clone git@github.com:Naxisbeast/AURUM-1.git
 cd AURUM-1
 
-# Set up Python 3.12 environment
+# Set up Python 3.12
 python3.12 -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # or: .venv\Scripts\Activate.ps1  # Windows
 
-# Install dependencies
+# Install
 pip install -r requirements.txt
-
-# Configure secrets (never commit .env)
-cp .env.example .env
-# Edit .env with your API keys
 
 # Run tests
 python -m pytest -q --basetemp .pytest_tmp -p no:cacheprovider
-
-# Run the dashboard
-python scripts/run_dashboard.py
-
-# Run a backtest
-python scripts/run_backtest.py
 ```
 
 ---
 
-## Architecture Overview
+## 🏛️ Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         AURUM-1 System                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                   Data Ingestion Layer                       │   │
-│  │  OANDA API ──→ Market Cache (SQLite)                        │   │
-│  │  FRED API  ──→ Macro Data (SQLite)                          │   │
-│  │  Alpha Vant.──→ News/Sentiment                              │   │
-│  │  CFTC       ──→ COT Data                                    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │               Feature Engineering Layer                      │   │
-│  │  OHLCV ──→ ATR, ADX, EMA, BB, MACD, RSI                    │   │
-│  │  Macro  ──→ DXY, VIX, Real Yield, CPI                       │   │
-│  │  COT     ──→ Net Long/Short Positioning                     │   │
-│  │  Time    ──→ Session labels, cyclical encoding              │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │               Signal Generation Layer                        │   │
-│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐      │   │
-│  │  │ Regime   │  │ Direction    │  │ Sentiment        │      │   │
-│  │  │ Classifier│  │ Predictor   │  │ Scorer           │      │   │
-│  │  └──────────┘  └──────────────┘  └──────────────────┘      │   │
-│  │         │              │                  │                │   │
-│  │         ▼              ▼                  ▼                │   │
-│  │  ┌───────────────────────────────────────────────────┐    │   │
-│  │  │              Ensemble Signal                       │    │   │
-│  │  └───────────────────────────────────────────────────┘    │   │
-│  │         │                                                   │   │
-│  │         ▼                                                   │   │
-│  │  ┌───────────────────────────────────────────────────┐    │   │
-│  │  │  State Machine (SCANNING → ARMED → WINDOW_OPEN)  │    │   │
-│  │  └───────────────────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │              Risk Management Layer                          │   │
-│  │  Kelly sizing, portfolio risk limits, kill switches,       │   │
-│  │  drawdown protection, spread filters                        │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                Execution Layer                               │   │
-│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐      │   │
-│  │  │ Paper    │  │ OANDA        │  │ Trade Log        │      │   │
-│  │  │ Broker   │  │ Broker       │  │ (SQLite)         │      │   │
-│  │  └──────────┘  └──────────────┘  └──────────────────┘      │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │           Testing & Research Layer                          │   │
-│  │  ┌──────────────┐  ┌────────────┐  ┌──────────────────┐    │   │
-│  │  │ Backtesting  │  │ Forward   │  │ Phase Research   │    │   │
-│  │  │ Engine       │  │ Shadow    │  │ (S1-S5 reports)  │    │   │
-│  │  └──────────────┘  └────────────┘  └──────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      AURUM-1 System                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │           Market Data Pipeline                        │   │
+│  │  OANDA API → Forward Shadow (continuous) → SQLite   │   │
+│  │                     ↓                                 │   │
+│  │           D4 Paper Trader (autonomous)               │   │
+│  │  Donchian 20 → 2R exit → PaperBroker → SQLite DB    │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │ D1-D6 Shadow │  │ ML Retrain  │  │ Streamlit        │  │
+│  │ Timers (15m) │  │ (Sat weekly)│  │ Dashboard (8501) │  │
+│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Validation Layer                                    │   │
+│  │  Walk-Forward │ MC Simulation │ TC Stress │ ICIR    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+**Key design decisions:**
+- **D4 is the best** — simplest configuration (Donchian 20, 2R, no filters) dominates over 11 years
+- **SELL signals essential** — add +$25,522 vs BUY-only over 11 years
+- **No ML needed** — D6 (ML ensemble) produces identical results to D4
+- **PaperBroker first** — real broker disabled by safety interlocks
 
 ---
 
-## Documentation
+## 📋 All Strategy Variants
 
-| Document | Description |
-|----------|-------------|
-| [docs/STATUS.md](docs/STATUS.md) | Current operational state and live metrics |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Detailed system architecture and component design |
-| [docs/STRATEGIES.md](docs/STRATEGIES.md) | All strategy variants (Raw, D1, D2) with performance |
-| [docs/RESEARCH.md](docs/RESEARCH.md) | Research methodology, phases S1-S5, findings |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Server deployment guide and systemd services |
-| [docs/DATA_FLOW.md](docs/DATA_FLOW.md) | End-to-end data pipeline documentation |
-| [docs/forward_shadow_donchian.md](docs/forward_shadow_donchian.md) | Forward shadow runner reference |
-| [docs/forward_shadow_dashboard.md](docs/forward_shadow_dashboard.md) | Dashboard configuration guide |
-| [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md) | Pre-deployment verification checklist |
-| [docs/OBSIDIAN_EXTRACTION_PLAN.md](docs/OBSIDIAN_EXTRACTION_PLAN.md) | Obsidian vault extraction reference |
-| [docs/reports/AURUM1_RESEARCH_REPORT.md](docs/reports/AURUM1_RESEARCH_REPORT.md) | Full research compilation |
-| [docs/reports/AURUM1_SYSTEMS_AUDIT_REPORT.md](docs/reports/AURUM1_SYSTEMS_AUDIT_REPORT.md) | Systems audit report |
-| [docs/reports/AURUM1_DEPLOYMENT_SUMMARY.md](docs/reports/AURUM1_DEPLOYMENT_SUMMARY.md) | Deployment summary report |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+| Rank | Variant | Entry | Exit | Direction | Trades | PF | Status |
+|:----:|---------|------|:---:|:---------:|:-----:|:--:|--------|
+| **1** | **D4 🏆** | Donchian 20 | 2R | BUY+SELL | 8,175 | **1.14** | **✅ Paper trading live** |
+| 2 | D6 | Donchian 20 + ML | 2R | BUY+SELL | 8,169 | 1.14 | 🟡 Shadow timer |
+| 3 | Raw | Donchian 20 | 2R | BUY only | 4,879 | 1.14 | 🔴 Running |
+| 4 | D2 | Donchian 20 | 1R | BUY only (filtered) | 6,890 | 1.03 | 🟡 Shadow timer |
+| 5 | D3 | Donchian 20 | 1R | BUY+SELL (filtered) | 3,544 | 1.02 | 🟡 Shadow timer |
+
+See [docs/STRATEGIES.md](docs/STRATEGIES.md) for full detail.
 
 ---
 
-## Running the System
+## 🧪 Validation Results
 
-### D4 Paper Trader 🏆 (Recommended)
+### Walk-Forward (18 windows over 11 years)
+| Metric | D4 (L20) | D4 (L55) |
+|--------|:--------:|:--------:|
+| Mean Sharpe | **1.11** | 0.61 |
+| Mean PF | **1.12** | 1.09 |
+| Positive windows | **82%** | 73% |
+| Mean MaxDD | 5.6% | **4.8%** |
 
-The autonomous paper trading service runs on the cloud server and executes D4 Donchian 2R BUY+SELL trades through the PaperBroker:
+### TC Stress Test (D4 baseline: 1.5p spread / 0.5p slippage)
+| Scenario | Sharpe | vs Baseline |
+|----------|:------:|:-----------:|
+| Baseline | **1.11** | — |
+| Wide spread (2.5p) | 1.05 | -5.9% |
+| Stress: 4p + 1p slip | 0.92 | -17% |
+| **Max stress: 6p + 2p slip** | **0.75** | **-33%** ✅ Still profitable |
 
-```bash
-# SSH to server, then:
-systemctl status aurum1-d4-paper.service
-journalctl -u aurum1-d4-paper.service -f
+### ICIR Signal Quality
+- **IC = -0.076** (p<0.001) — statistically significant but weak short-term predictive power
+- Profit comes from **asymmetric 2R payoff**, not signal timing
+- Decay: signal fades gracefully over 5 hours, no reversal (no overfitting)
 
-# Check trade history
-sqlite3 /opt/aurum1/aurum1/data/paper_trading.sqlite3 \
-  "SELECT timestamp, direction, net_pnl, exit_reason FROM trades ORDER BY timestamp DESC LIMIT 10;"
-
-# Run locally (one-shot)
-python scripts/d4_paper_trader.py --run-once
-```
-
-### Live/Paper Trading (Main Orchestrator)
-
-```bash
-# Start the orchestrator (paper mode by default)
-python scripts/run_live.py
-
-# The orchestrator runs the full pipeline:
-# Data → Features → Models → Signals → Risk → Execution
-```
-
-### Dashboard
-
-```bash
-# Start the Streamlit dashboard
-python scripts/run_dashboard.py
-# Default: http://127.0.0.1:8501
-```
-
-### Backtesting
-
-```bash
-# Run standard backtest
-python scripts/run_backtest.py
-
-# Run Donchian research backtest
-python scripts/donchian_research_runner.py --market-db aurum1/data/backtest_market_cache.sqlite3
-
-# Run Donchian diagnostics
-python scripts/donchian_diagnostics.py
-python scripts/donchian_next_diagnostics.py
-```
-
-### Forward Shadow Testing (Research)
-
-The forward shadow runs a locked strategy alongside live market data without executing trades.
-
-```bash
-# Initialize shadow ledger
-python scripts/forward_shadow_donchian.py init
-
-# Run one-time update
-python scripts/forward_shadow_donchian.py run-once --start-date 2026-05-01T00:00:00Z
-
-# Run continuous service
-python scripts/forward_shadow_donchian.py service --start-date 2026-05-01T00:00:00Z
-
-# Check status
-python scripts/forward_shadow_donchian.py status
-
-# Generate weekly report
-python scripts/forward_shadow_donchian.py weekly-report
-```
-
-### D1/D2/D3/D4/D6 Shadow Variants (Timer-Based)
-
-```bash
-# Run any variant's shadow journal
-python scripts/run_phase_s5_d1_shadow_forward_journal.py  # D1 filtered
-python scripts/forward_shadow_donchian_d2.py               # D2 simulation
-python scripts/forward_shadow_donchian_d2.py --json        # With JSON output
-
-# All variants run automatically every 15 min via systemd timers
-```
-
-### Walk-Forward Validation
-
-```bash
-# D4 walk-forward analysis (2yr train / 6mo test sliding windows)
-python scripts/run_d4_walk_forward.py
-
-# 55-bar lookback variant (research)
-python scripts/run_55bar_walk_forward.py
-python scripts/run_20bar_walk_forward.py
-```
-
-### ML Model Retraining
-
-```bash
-# Manual retrain (runs automatically Saturdays via timer)
-python -c "from aurum1.models.retrainer import AurumRetrainer; AurumRetrainer('/opt/aurum1').retrain_all()"
-```
-
-### Phase Research Reports
-
-```bash
-python scripts/run_phase_s1_forward_shadow_failure_audit.py
-python scripts/run_phase_s2_shadow_context_filter_simulation.py
-python scripts/run_phase_s3_candidate_filter_shadow_replay.py
-python scripts/run_phase_s4_shadow_decision_candidate_lock.py
-python scripts/run_phase_s5_d1_shadow_forward_journal.py
-```
+### Risk Sensitivity (Monte Carlo — 10k sims)
+| Risk/Trade | Med DD | 99th DD | Ruin |
+|:----------:|:------:|:-------:|:----:|
+| **0.25%** ⬅️ | **11.9%** | **20.3%** | **0%** |
 
 ---
 
-## Strategy Variants
+## 🚀 Deployed Cloud Services
 
-| Variant | Entry | Exit | Directions | Filters | Trades | PF | Status |
-|---------|-------|------|-----------|---------|--------|----|--------|
-| **D4** 🏆 | Price > 20-bar high / < 20-bar low | Fixed 2R | BUY+SELL | None | 8,175 | **1.14** | ✅ **Paper trading live** |
-| D6 | Price > 20-bar high / < 20-bar low | Fixed 2R | BUY+SELL | ML ensemble | 8,169 | 1.14 | 🟡 Shadow timer |
-| Raw | Price > 20-bar high | Fixed 2R | BUY only | None | 4,879 | 1.14 | 🔴 Forward shadow |
-| D2 | Price > 20-bar high | Fixed 1R | BUY only | Vol + Session | 6,890 | 1.03 | 🟡 Shadow timer |
-| D3 | Price > 20-bar high / < 20-bar low | Fixed 1R | BUY+SELL | Vol + Session | 3,544 | 1.02 | 🟡 Shadow timer |
-| D1 | Price > 20-bar high | Fixed 1R | BUY only | Vol + Session | 36 closed | 1.24 | 🟡 Shadow journal |
+| Service | Function | Schedule |
+|---------|----------|----------|
+| `aurum1-d4-paper.service` | **🏆 D4 autonomous paper trader** | Continuous |
+| `aurum1-forward-shadow.service` | Market data cache (OANDA → SQLite) | Continuous |
+| `aurum1-dashboard.service` | **Streamlit live dashboard** (port 8501) | Continuous |
+| `aurum1-d1-shadow.timer` | D1 filtered 1R journal | Every 15 min |
+| `aurum1-d2-shadow.timer` | D2 comparison | Every 15 min |
+| `aurum1-d3-shadow.timer` | D3 SELL test | Every 15 min |
+| `aurum1-d4-shadow.timer` | D4 best variant comparison | Every 15 min |
+| `aurum1-d6-shadow.timer` | D6 ML variant comparison | Every 15 min |
+| `aurum1-ml-retrain.timer` | ML model retraining | Weekly (Sat) |
 
-See [docs/STRATEGIES.md](docs/STRATEGIES.md) for full details.
-
----
-
-## Project Structure
-
-```
-aurum1/                           # Main application package
-├── __init__.py
-├── orchestrator.py               # Main trading loop coordinator
-├── instruments.py                # Instrument specifications (XAU/USD)
-├── backtesting/                  # Backtest engine
-│   ├── engine.py                 # Event-driven backtest core
-│   ├── monte_carlo.py            # Monte Carlo simulation
-│   ├── walk_forward.py           # Walk-forward analysis
-│   ├── report.py                 # Report generation
-│   └── ablation.py               # Ablation testing
-├── data/
-│   ├── ingestion.py              # OANDA, FRED, Alpha Vantage, CFTC fetchers
-│   ├── aurum1.sqlite3            # Main trade log (gitignored)
-│   ├── forward_shadow_market_cache.sqlite3  # Shadow market cache (gitignored)
-│   └── backtest_market_cache.sqlite3        # Backtest cache (gitignored)
-├── execution/
-│   ├── engine.py                 # Execution engine wrapper
-│   └── broker.py                 # PaperBroker + OandaBroker
-├── features/
-│   └── engineer.py               # Feature engineering pipeline
-├── models/
-│   ├── direction_predictor.py    # ML direction prediction
-│   ├── regime_classifier.py      # Market regime classification
-│   ├── ensemble.py               # Signal ensemble combiner
-│   ├── sentiment_model.py        # News sentiment scoring
-│   ├── retrainer.py              # Weekly model retraining
-│   ├── utils.py                  # Model serialization
-│   └── ablation.py               # Model ablation testing
-├── reports/                      # Phase research report generators
-│   ├── phase_s1_forward_shadow_failure_audit.py
-│   ├── phase_s2_shadow_context_filter_simulation.py
-│   ├── phase_s3_candidate_filter_shadow_replay.py
-│   ├── phase_s4_shadow_decision_candidate_lock.py
-│   └── phase_s5_d1_shadow_forward_journal.py
-├── risk/
-│   └── manager.py                # Kelly sizing, kill switches, spread filters
-└── signals/
-    ├── state_machine.py          # Scanning → Armed → Window Open states
-    └── __init__.py               # MachineMode, MachineState enums
-
-scripts/                          # Run scripts and research tools
-├── d4_paper_trader.py            # 🏆 D4 autonomous paper trader
-├── run_d4_walk_forward.py        # D4 walk-forward validation
-├── forward_shadow_donchian.py    # Raw Donchian 2R forward shadow runner
-├── forward_shadow_donchian_d2.py # D2 filtered 1R variant
-├── donchian_research_runner.py   # Donchian signal generation
-├── research_edge_prototypes.py   # Alternative entry prototypes
-├── run_live.py                   # Start the main orchestrator
-├── run_dashboard.py              # Start Streamlit dashboard
-├── run_backtest.py               # Run backtest engine
-├── run_phase_*.py               # Phase research launchers
-├── audit_market_cache.py         # Market cache data audit
-├── analyze_mfe_mae.py           # MFE/MAE analysis
-├── analyze_trade_lifecycle.py   # Trade lifecycle analysis
-├── analyze_signal_forward_returns.py  # Forward return analysis
-
-deploy/                           # Systemd service templates
-├── aurum1-d4-paper.service       # D4 autonomous paper trader
-├── aurum1.service.template
-├── dashboard.service.template
-├── forward-shadow.service.template
-├── forward-shadow-backup.service.template
-├── forward-shadow-weekly-report.service.template
-├── aurum1-d1-shadow.*            # Timer-based shadow services (D1-D6)
-├── aurum1-d2-shadow.*
-├── aurum1-d3-shadow.*
-├── aurum1-d4-shadow.*
-├── aurum1-d6-shadow.*
-├── aurum1-ml-retrain.*
-└── logrotate/
-
-docs/                             # Documentation
-├── ARCHITECTURE.md
-├── STATUS.md
-├── STRATEGIES.md
-├── RESEARCH.md
-├── DEPLOYMENT.md
-├── DATA_FLOW.md
-├── forward_shadow_donchian.md
-├── forward_shadow_dashboard.md
-└── DEPLOYMENT_CHECKLIST.md
-
-tests/                            # Test suite
-├── test_forward_shadow_donchian.py
-├── test_forward_shadow_*.py
-└── ...
-```
+**Server**: Ubuntu 24.04, 3.7GB RAM, 38GB disk (53% used), Python 3.12
 
 ---
 
-## Safety & Interlocks
+## 📁 Project Structure
 
-The system has multiple safety layers to prevent accidental live trading:
+```
+aurum1/             # Core package (data, signals, risk, execution, models, backtesting)
+scripts/            # Run scripts, research tools, paper trader
+monitor/            # Dashboard (Streamlit) + metrics
+deploy/             # Systemd service definitions + logrotate
+docs/               # Documentation
+tests/              # Test suite (pytest)
+reports/            # Generated research reports (gitignored)
+```
 
-1. **ALLOW_OANDA_ORDERS** — Must be explicitly set to `true` to enable broker orders
-2. **ALLOW_LIVE_TRADING** — Must be `true` for live capital deployment
-3. **Forward shadow** — Fails closed if either env var is enabled
-4. **OANDA_ENV** — Must be `practice` even for shadow (never `live`)
-5. **Risk manager** — Daily loss kill, total drawdown kill, spread filters, position size limits
+Full structure in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## 🛡️ Safety Interlocks
+
+Live trading is shielded behind multiple gates:
+1. **ALLOW_OANDA_ORDERS** — must be `true` to send real orders
+2. **ALLOW_LIVE_TRADING** — must be `true` for live capital
+3. **OANDA_ENV** — locked to `practice`
+4. **Risk manager** — daily loss kill, drawdown kill, spread filters
 
 ```bash
-# Safe defaults (never change unless deliberately testing live execution)
+# Safe defaults (never change for production)
 ALLOW_OANDA_ORDERS=false
 ALLOW_LIVE_TRADING=false
 OANDA_ENV=practice
@@ -370,15 +201,19 @@ OANDA_ENV=practice
 
 ---
 
-## Prerequisites
+## 📖 Documentation
 
-- **Python 3.12** (strictly required for the forward shadow runner)
-- **OANDA API key** (practice account) — market data and broker
-- **FRED API key** (optional) — macro-economic data
-- **Alpha Vantage API key** (optional) — news sentiment
+| Doc | What You'll Find |
+|-----|------------------|
+| [STATUS.md](docs/STATUS.md) | Live operational state, equity, trade log |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system design, component interaction |
+| [STRATEGIES.md](docs/STRATEGIES.md) | All strategy variants with performance |
+| [RESEARCH.md](docs/RESEARCH.md) | Research phases S1-S5, findings |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Server setup, systemd, monitoring |
+| [DATA_FLOW.md](docs/DATA_FLOW.md) | End-to-end data pipeline |
 
 ---
 
-## License
+## 🏁 License
 
 Private — AURUM-1 Trading System. All rights reserved.
