@@ -1,10 +1,10 @@
 # AURUM-1 🏆
 
-**Autonomous algorithmic trading system for XAU/USD (Gold) on M15** — live paper trading on a cloud server with a proven Donchian breakout strategy. Up **+4.49% ($449)** in the first 8 days of live trading.
+**Autonomous algorithmic trading system for XAU/USD (Gold) on M15** — live paper trading on a cloud server with a proven Donchian breakout strategy. Up **+4.49% ($449)** peak in the first 13 days.
 
-> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 21 trades closed, 52% win rate, net PnL **+$228**, equity **$10,428**.
+> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 21 trades closed (11W / 10L), 52% win rate, net PnL **+$273**, equity **$10,428**.
 > 
-> 🖥️ **Live Dashboard**: [`http://178.105.245.66:8501`](http://178.105.245.66:8501)
+> 🖥️ **Live Dashboard**: **[https://wear-boot-jennifer-brush.trycloudflare.com](https://wear-boot-jennifer-brush.trycloudflare.com)**
 > 
 > 📊 [View Full Status →](docs/STATUS.md)
 
@@ -25,7 +25,7 @@ The simplest strategy wins. **D4** is pure price action:
 | **Mean Sharpe** | 1.27 | — |
 | **Positive windows** | 88.9% (16/18) | — |
 | **Live Win Rate** | — | **52%** (11/21) |
-| **Live Net PnL** | — | **+$228** |
+| **Live Net PnL** | — | **+$273** |
 | **Live Avg R** | — | **+0.57R** |
 | **Peak Equity** | — | **+$449** (+4.49%) |
 
@@ -37,14 +37,14 @@ The simplest strategy wins. **D4** is pure price action:
 
 ```
 Jul 02 — $10,000 ──► Start
-Jul 03 — $10,150 ──► +1.5%  (3 trades)
-Jul 07 — $10,214 ──► +2.1%  (first TP hit, DB fixed)
-Jul 08 — $10,384 ──► +3.8%  (SELL streak: 4 wins in a row)
-Jul 09 — $10,400 ──► +4.0%  (mixed BUY/SELL)
-Jul 10 — $10,350 ──► +3.5%  (drawdown: 3 stop losses)
-Jul 13 — $10,420 ──► +4.2%  (recovery: 3 SELL wins)
-Jul 14 — $10,449 ──► +4.5%  🏆 peak (20 trades)
-Jul 15 — $10,428 ──► +4.3%  (SELL hit SL, 21 trades total)
+Jul 03 — $10,150 ──► +1.5%   (3 trades)
+Jul 07 — $10,214 ──► +2.1%   (first TP hit, DB fixed)
+Jul 08 — $10,384 ──► +3.8%   (SELL streak: 4 wins in a row)
+Jul 09 — $10,400 ──► +4.0%   (mixed BUY/SELL)
+Jul 10 — $10,350 ──► +3.5%   (drawdown: 3 stop losses)
+Jul 13 — $10,420 ──► +4.2%   (recovery: 3 SELL wins)
+Jul 14 — $10,449 ──► +4.5%   🏆 peak (20 trades)
+Jul 15 — $10,428 ──► +4.3%   (SELL hit SL, 21 trades, +$273 net)
 ```
 
 [**Live Dashboard →**](http://178.105.245.66:8501)
