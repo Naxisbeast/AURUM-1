@@ -72,31 +72,65 @@ python -m pytest -q --basetemp .pytest_tmp -p no:cacheprovider
 
 ---
 
-## 🏛️ Architecture Overview
+## 🏛️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      AURUM-1 System                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │           Market Data Pipeline                        │   │
-│  │  OANDA API → Forward Shadow (continuous) → SQLite   │   │
-│  │                     ↓                                 │   │
-│  │           D4 Paper Trader (autonomous)               │   │
-│  │  Donchian 20 → 2R exit → PaperBroker → SQLite DB    │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ D1-D6 Shadow │  │ ML Retrain  │  │ Streamlit        │  │
-│  │ Timers (15m) │  │ (Sat weekly)│  │ Dashboard (8501) │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Validation Layer                                    │   │
-│  │  Walk-Forward │ MC Simulation │ TC Stress │ ICIR    │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Data["📡 DATA LAYER"]
+        OANDA[OANDA API<br/>Practice Account] --> FS[Forward Shadow<br/>Continuous Service]
+        FS --> MKT_CACHE[(Market Cache<br/>SQLite)]
+    end
+
+    subgraph Trading["🤖 TRADING LAYER"]
+        MKT_CACHE --> D4[D4 Paper Trader<br/>Donchian 20 · 2R · BUY+SELL]
+        D4 --> PB[PaperBroker<br/>Simulated Execution]
+        PB --> TRADE_DB[(Paper Trading DB<br/>SQLite)]
+    end
+
+    subgraph Research["🔬 RESEARCH LAYER"]
+        D1[D1 Shadow<br/>Filtered 1R]
+        D2[D2 Shadow<br/>BUY+Filter]
+        D3[D3 Shadow<br/>SELL+Filter]
+        D6[D6 Shadow<br/>ML Ensemble]
+        ML[ML Retrainer<br/>Weekly · Sat]
+    end
+
+    subgraph Validation["📊 VALIDATION"]
+        WF[Walk-Forward<br/>18 Windows]
+        MC[Monte Carlo<br/>10k Sims]
+        TC[TC Stress<br/>6p Spread Test]
+        IC[ICIR Decay<br/>Signal Horizon]
+    end
+
+    subgraph Monitoring["📈 MONITORING"]
+        DASH[Streamlit Dashboard<br/>Port 8501]
+        CF[Cloudflare Tunnel<br/>HTTPS Access]
+        HEALTH[Health File<br/>JSON Metrics]
+    end
+
+    subgraph Safety["🛡️ SAFETY"]
+        KILL[3 Kill Switches<br/>Daily · Drawdown · Spread]
+        INTERLOCK[Env Interlocks<br/>ALLOW_OANDA_ORDERS<br/>ALLOW_LIVE_TRADING]
+        BACKUP[Daily SQLite Backups<br/>>1 GB Total]
+    end
+
+    TRADE_DB --> DASH
+    MKT_CACHE --> DASH
+    DASH --> CF
+
+    MKT_CACHE --> Research
+    MKT_CACHE --> Validation
+    TRADE_DB --> Validation
+
+    D4 --> KILL
+    D4 --> INTERLOCK
+
+    style Data fill:#1e3a5f,color:#fff
+    style Trading fill:#1a4a3a,color:#fff
+    style Research fill:#4a3a1a,color:#fff
+    style Validation fill:#3a1a4a,color:#fff
+    style Monitoring fill:#1a3a4a,color:#fff
+    style Safety fill:#4a1a1a,color:#fff
 ```
 
 **Key design decisions:**
