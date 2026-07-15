@@ -2,7 +2,7 @@
 
 **Autonomous algorithmic trading system for XAU/USD (Gold) on M15** — live paper trading on a cloud server with a proven Donchian breakout strategy. Up **+4.49% ($449)** in the first 8 days of live trading.
 
-> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 20 trades closed, 55% win rate, net PnL **+$294.05**, peak equity gain **+$449**.
+> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 21 trades closed, 52% win rate, net PnL **+$228**, equity **$10,428**.
 > 
 > 🖥️ **Live Dashboard**: [`http://178.105.245.66:8501`](http://178.105.245.66:8501)
 > 
@@ -24,10 +24,10 @@ The simplest strategy wins. **D4** is pure price action:
 | **Profit Factor** | 1.14 | — |
 | **Mean Sharpe** | 1.27 | — |
 | **Positive windows** | 88.9% (16/18) | — |
-| **Live Win Rate** | — | **55.0%** (11/20) |
-| **Live Net PnL** | — | **+$294.05** |
-| **Live Avg R** | — | **+0.61R** |
-| **Peak Equity** | — | **+$449.15** (+4.49%) |
+| **Live Win Rate** | — | **52%** (11/21) |
+| **Live Net PnL** | — | **+$228** |
+| **Live Avg R** | — | **+0.57R** |
+| **Peak Equity** | — | **+$449** (+4.49%) |
 
 *Walk-forward: 11 years of M15 data, sliding 2yr train / 6mo test windows*
 
@@ -38,12 +38,13 @@ The simplest strategy wins. **D4** is pure price action:
 ```
 Jul 02 — $10,000 ──► Start
 Jul 03 — $10,150 ──► +1.5%  (3 trades)
-Jul 07 — $10,214 ──► +2.1%  (first TP hit, DB recording confirmed working)
-Jul 08 — $10,384 ──► +3.8%  (SELL streak: 4 consecutive wins)
-Jul 09 — $10,400 ──► +4.0%  (mixed BUY/SELL, 11 trades total)
-Jul 10 — $10,350 ──► +3.5%  (drawdown: 2 stop losses)
+Jul 07 — $10,214 ──► +2.1%  (first TP hit, DB fixed)
+Jul 08 — $10,384 ──► +3.8%  (SELL streak: 4 wins in a row)
+Jul 09 — $10,400 ──► +4.0%  (mixed BUY/SELL)
+Jul 10 — $10,350 ──► +3.5%  (drawdown: 3 stop losses)
 Jul 13 — $10,420 ──► +4.2%  (recovery: 3 SELL wins)
-Jul 14 — $10,449 ──► +4.5%  🏆 peak (20 trades, 55% WR)
+Jul 14 — $10,449 ──► +4.5%  🏆 peak (20 trades)
+Jul 15 — $10,428 ──► +4.3%  (SELL hit SL, 21 trades total)
 ```
 
 [**Live Dashboard →**](http://178.105.245.66:8501)
@@ -211,6 +212,7 @@ OANDA_ENV=practice
 | [RESEARCH.md](docs/RESEARCH.md) | Research phases S1-S5, findings |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Server setup, systemd, monitoring |
 | [DATA_FLOW.md](docs/DATA_FLOW.md) | End-to-end data pipeline |
+| [journey/](journey/) | 🧑‍🎓 Student learning journal — real struggles and lessons |
 
 ---
 
