@@ -43,7 +43,7 @@ def main() -> None:
     equity_curve = load_equity_curve(db_path).tail(max_rows)
     trades = load_trade_log(db_path)
     events = load_event_log(db_path)
-    status = get_system_status(db_path, None, settings)
+    status = get_system_status(db_path, settings)
 
     st.title("AURUM-1 Live Monitor")
     render_status_bar(status)
