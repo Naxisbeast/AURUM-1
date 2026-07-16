@@ -568,7 +568,7 @@ def render_trade_log(data: dict[str, Any]) -> None:
             "Exit": exit_str,
             "R": r_str,
             "PnL": pnl_str,
-            "Exit": exit_reason,
+            "Exit Reason": exit_reason,
             "_win": is_win,
         })
 
@@ -582,7 +582,7 @@ def render_trade_log(data: dict[str, Any]) -> None:
             return ["background-color: rgba(22,163,74,0.08)"] * len(row)
         return ["background-color: rgba(220,38,38,0.06)"] * len(row)
 
-    display = ["", "Time", "Dir", "Entry", "Exit", "R", "PnL", "Exit"]
+    display = ["", "Time", "Dir", "Entry", "Exit", "R", "PnL", "Exit Reason"]
     styled = df[display].style.apply(_row_style, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
@@ -673,16 +673,9 @@ def main():
     # Health bar (always on top)
     render_health_bar(data)
 
-    # Progress metric + D4 KPI cards
-    col_left, col_right = st.columns([3, 1])
-    with col_left:
-        st.subheader("D4 (20-bar Donchian)")
-        render_kpi_cards(data)
-    with col_right:
-        st.metric("Status", data["status"])
-        if data["trade_count"] > 0:
-            pnl_total = data.get("total_pnl", 0) or 0
-            st.metric("Total PnL (all-time)", f"${pnl_total:+,.2f}")
+    # D4 KPI cards
+    st.subheader("D4 (20-bar Donchian)")
+    render_kpi_cards(data)
 
     # D4 vs D7 side-by-side comparison
     render_comparison_card(data, d7_data)
