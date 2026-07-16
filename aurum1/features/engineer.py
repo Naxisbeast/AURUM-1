@@ -166,6 +166,27 @@ class FeatureEngineer:
         frame["adx_14"] = _adx_wilder(high, low, close, 14)
         self._register_min_lookbacks({"adx_14": 27})
 
+        # ── New features (research additions) ──
+
+        # Yang-Zhang volatility estimator (uses O,H,L,C for higher efficiency)
+        frame["yang_zhang_vol"] = _yang_zhang_volatility(high, low, close, frame["open"], 14)
+        self._register_min_lookbacks({"yang_zhang_vol": 14})
+
+        # Kaufman Efficiency Ratio: net change / sum of absolute changes
+        frame["efficiency_ratio"] = _kaufman_efficiency(close, 10)
+        self._register_min_lookbacks({"efficiency_ratio": 10})
+
+        # Breakout distance: how far price penetrated Donchian band, as % of ATR
+        donchian_upper = high.rolling(20, min_periods=20).max().shift(1)
+        donchian_lower = low.rolling(20, min_periods=20).min().shift(1)
+        atr_safe = frame["atr_14"].replace(0.0, np.nan)
+        frame["breakout_distance"] = np.where(
+            close > donchian_upper,
+            (close - donchian_upper) / atr_safe,
+            np.where(close < donchian_lower, (donchian_lower - close) / atr_safe, 0.0),
+        )
+        self._register_min_lookbacks({"breakout_distance": 27})
+
         frame["rel_volume"] = volume / volume.rolling(20, min_periods=20).mean().replace(0.0, np.nan)
         frame["vwap_deviation"] = (close - _daily_vwap(close, volume)) / frame["atr_14"].replace(0.0, np.nan)
         self._register_min_lookbacks({"rel_volume": 20, "vwap_deviation": 14})
@@ -349,6 +370,49 @@ def _daily_vwap(close: pd.Series, volume: pd.Series) -> pd.Series:
     cumulative_value = (close * volume).groupby(day_key).cumsum()
     cumulative_volume = volume.groupby(day_key).cumsum().replace(0.0, np.nan)
     return cumulative_value / cumulative_volume
+
+
+def _yang_zhang_volatility(
+    high: pd.Series, low: pd.Series, close: pd.Series, open_: pd.Series, period: int
+) -> pd.Series:
+    """Yang-Zhang volatility estimator.
+
+    Uses open, high, low, close for 9.5x more efficient volatility estimation
+    than simple close-to-close. Captures both overnight and intraday volatility.
+
+    σ²_YZ = σ²_OH + σ²_CO + (1-k)σ²_HL
+
+    Reference: Yang & Zhang (2000), "Drift-Independent Volatility Estimation"
+    """
+    k = 0.34 / (1.34 + (period + 1) / (period - 1))  # Optimal weight
+
+    # Overnight volatility (close → open)
+    log_co = (open_ / close.shift(1)).apply(np.log)
+    var_co = log_co.rolling(period, min_periods=period).var()
+
+    # Open-to-close volatility
+    log_oc = (close / open_).apply(np.log)
+    var_oc = log_oc.rolling(period, min_periods=period).var()
+
+    # High-low volatility (Rogers-Satchell)
+    log_hl = (high / low).apply(np.log)
+    var_hl = (log_hl ** 2).rolling(period, min_periods=period).mean()
+
+    sigma_sq = var_co + var_oc + (1 - k) * var_hl
+    return sigma_sq.apply(np.sqrt)
+
+
+def _kaufman_efficiency(close: pd.Series, period: int) -> pd.Series:
+    """Kaufman Efficiency Ratio: directionality / noise.
+
+    ER = |close - close_n| / sum(|close_i - close_(i-1)|)
+
+    Ranges from 0 (random walk) to 1 (perfectly trending).
+    Used to dynamically adjust observation windows.
+    """
+    direction = (close - close.shift(period)).abs()
+    noise = close.diff().abs().rolling(period, min_periods=period).sum()
+    return direction / noise.replace(0.0, np.nan)
 
 
 def _merge_asof_on_index(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
