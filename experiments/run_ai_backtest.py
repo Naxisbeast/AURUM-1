@@ -136,7 +136,8 @@ for bar_idx in range(N):
         ai_calls += 1
         try:
             decision = ai.decide_on_signal(ctx)
-            decision = safety.validate_new_signal(decision, ctx)
+            if decision.get('action') == 'take':
+                decision = safety.validate_new_signal(decision, ctx)
         except Exception:
             errors += 1; decision = {"action": "skip", "reason": "error"}
 

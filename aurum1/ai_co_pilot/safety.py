@@ -22,7 +22,7 @@ class SafetyLayer:
     def __init__(self):
         # Absolute limits (never override)
         self.max_risk_per_trade = 0.01  # 1.0% max
-        self.min_risk_per_trade = 0.001  # 0.1% min
+        self.min_risk_per_trade = 0.0005  # 0.05% min (allows streak-reduced sizing)
         self.max_stop_multiplier = 3.5  # 3.5x ATR max
         self.min_stop_multiplier = 1.0  # 1.0x ATR min
         self.max_tp_multiplier = 6.0  # 6.0x ATR max
