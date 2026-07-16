@@ -130,12 +130,12 @@ def load_overview() -> dict[str, Any]:
             trades_list.append(d)
         result["trades"] = trades_list
         result["trade_count"] = len(trades_list)
-        result["win_count"] = sum(1 for t in trades_list if t.get("net_pnl", 0) or 0 > 0)
-        result["loss_count"] = sum(1 for t in trades_list if (t.get("net_pnl", 0) or 0) <= 0)
+        result["win_count"] = sum(1 for t in trades_list if (t.get("net_pnl") or 0) > 0)
+        result["loss_count"] = sum(1 for t in trades_list if (t.get("net_pnl") or 0) <= 0)
 
         # Profit factor
-        gross_win = sum(t["net_pnl"] for t in trades_list if (t.get("net_pnl", 0) or 0) > 0)
-        gross_loss = abs(sum(t["net_pnl"] for t in trades_list if (t.get("net_pnl", 0) or 0) < 0))
+        gross_win = sum(t["net_pnl"] for t in trades_list if (t.get("net_pnl") or 0) > 0)
+        gross_loss = abs(sum(t["net_pnl"] for t in trades_list if (t.get("net_pnl") or 0) < 0))
         if gross_loss > 0:
             result["profit_factor"] = gross_win / gross_loss
 
@@ -144,7 +144,7 @@ def load_overview() -> dict[str, Any]:
             result["win_rate"] = result["win_count"] / result["trade_count"]
 
         # Total net PnL
-        result["total_pnl"] = sum(t.get("net_pnl", 0) or 0 for t in trades_list)
+        result["total_pnl"] = sum((t.get("net_pnl") or 0) for t in trades_list)
 
         # Average R
         r_vals = [t.get("r_multiple", 0) or 0 for t in trades_list if t.get("r_multiple") is not None]
@@ -297,7 +297,7 @@ def render_health_bar(data: dict[str, Any]) -> None:
             <strong>{eq_str}</strong>
           </div>
           <div style="display:flex;flex-direction:column;gap:2px;">
-            <span style="font-size:0.75rem;color:#64748b;">Today</span>
+            <span style="font-size:0.75rem;color:#64748b;">Today's P&amp;L</span>
             <strong style="color:{pnl_color};">{pnl_str}</strong>
           </div>
           <div style="display:flex;flex-direction:column;gap:2px;">
@@ -407,30 +407,53 @@ def render_equity_chart(data: dict[str, Any]) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 def render_price_chart(data: dict[str, Any]) -> None:
-    """Price chart with entry/exit trade markers overlaid on price line.
+    """Price chart with real OHLC close-price line + trade entry/exit markers.
 
-    Each trade shows: entry price at entry_time, exit price at exit_time,
-    colored by direction (green BUY, red SELL). Win/loss is distinguished
-    by marker shape (triangle-up win, triangle-down loss).
+    Marker legend:
+    - ▲ green triangle = BUY entry
+    - ▼ red triangle = SELL entry
+    - ◆ white diamond = WIN exit
+    - ◆ black diamond = LOSS exit
     """
     trades = data.get("trades", [])
     if not trades:
         st.caption("Price chart: no trades to plot")
         return
 
+    # Load OHLC close prices from the forward shadow cache
+    MARKET_CACHE = ROOT / "aurum1" / "data" / "forward_shadow_market_cache.sqlite3"
+    price_df = pd.DataFrame()
+    if MARKET_CACHE.exists():
+        try:
+            conn = sqlite3.connect(f"file:{MARKET_CACHE}?mode=ro", uri=True)
+            price_df = pd.read_sql_query(
+                "SELECT timestamp, close FROM ohlcv_M15 ORDER BY timestamp",
+                conn,
+            )
+            conn.close()
+            price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], utc=True)
+            price_df["close"] = pd.to_numeric(price_df["close"], errors="coerce")
+        except Exception:
+            pass
+
     fig = go.Figure()
 
-    # Collect all price points from trades
-    entry_times = []
-    entry_prices = []
-    exit_times = []
-    exit_prices = []
-    entry_colors = []
-    exit_colors = []
-    entry_symbols = []
-    exit_symbols = []
-    entry_labels = []
-    exit_labels = []
+    # Plot real close-price line if available
+    if not price_df.empty:
+        fig.add_trace(go.Scatter(
+            x=price_df["timestamp"], y=price_df["close"],
+            mode="lines",
+            line={"color": "#475569", "width": 1},
+            name="XAU/USD",
+            hoverinfo="skip",
+        ))
+
+    # Collect trade markers — use slight jitter for overlapping price levels
+    import random
+    rng = random.Random(42)
+
+    entry_times, entry_prices, entry_colors, entry_symbols, entry_labels = [], [], [], [], []
+    exit_times, exit_prices, exit_colors, exit_symbols, exit_labels = [], [], [], [], []
 
     for t in trades:
         entry_time = t.get("entry_time") or t.get("timestamp")
@@ -438,34 +461,35 @@ def render_price_chart(data: dict[str, Any]) -> None:
         entry_price = t.get("entry_price")
         exit_price = t.get("exit_price")
         direction = t.get("direction", "BUY")
-        pnl = t.get("net_pnl", 0) or 0
+        pnl = (t.get("net_pnl") or 0)
         is_win = pnl > 0
 
         if entry_time and entry_price:
             try:
-                entry_times.append(pd.Timestamp(entry_time))
+                ts = pd.Timestamp(entry_time)
+                r_multiple = t.get("r_multiple")
+                r_str = f"R={r_multiple:+.3f}" if r_multiple else ""
+                entry_times.append(ts)
                 entry_prices.append(entry_price)
                 entry_colors.append("#22c55e" if direction == "BUY" else "#ef4444")
-                entry_symbols.append("triangle-up" if is_win else "triangle-down")
-                r_multiple = t.get("r_multiple", None)
-                r_str = f"R={r_multiple:+.3f}" if r_multiple else ""
+                entry_symbols.append("triangle-up" if direction == "BUY" else "triangle-down")
                 entry_labels.append(
-                    f"{direction} @ ${entry_price:.2f}<br>"
-                    f"Entry: {str(entry_time)[:16]}<br>{r_str}"
+                    f"Entry {direction}<br>${entry_price:.2f}<br>{r_str}"
                 )
             except Exception:
                 pass
 
         if exit_time and exit_price:
             try:
-                exit_times.append(pd.Timestamp(exit_time))
+                ts = pd.Timestamp(exit_time)
+                exit_times.append(ts)
                 exit_prices.append(exit_price)
                 exit_colors.append("#22c55e" if is_win else "#ef4444")
-                exit_symbols.append("x" if is_win else "x-thin")
+                exit_symbols.append("diamond" if is_win else "diamond")
                 exit_labels.append(
+                    f"{'WIN' if is_win else 'LOSS'}<br>"
                     f"Exit @ ${exit_price:.2f}<br>"
-                    f"PnL: ${pnl:+,.2f}<br>"
-                    f"{'WIN' if is_win else 'LOSS'}"
+                    f"PnL: ${pnl:+,.2f}"
                 )
             except Exception:
                 pass
@@ -474,7 +498,7 @@ def render_price_chart(data: dict[str, Any]) -> None:
         st.caption("Price chart: no valid trade timestamps")
         return
 
-    # Entry markers
+    # Entry markers (no connecting lines)
     fig.add_trace(go.Scatter(
         x=entry_times, y=entry_prices,
         mode="markers",
@@ -490,25 +514,12 @@ def render_price_chart(data: dict[str, Any]) -> None:
         fig.add_trace(go.Scatter(
             x=exit_times, y=exit_prices,
             mode="markers",
-            marker={"size": 8, "color": exit_colors, "symbol": exit_symbols,
+            marker={"size": 9, "color": exit_colors, "symbol": exit_symbols,
                     "line": {"width": 1, "color": "white"}},
             name="Exit",
             text=exit_labels,
             hovertemplate="%{text}<extra></extra>",
         ))
-
-        # Connect entry to exit with lines
-        for i in range(min(len(entry_times), len(exit_times))):
-            if entry_times[i] and exit_times[i] and entry_prices[i] and exit_prices[i]:
-                fig.add_trace(go.Scatter(
-                    x=[entry_times[i], exit_times[i]],
-                    y=[entry_prices[i], exit_prices[i]],
-                    mode="lines",
-                    line={"color": "#22c55e" if entry_colors[i] == "#22c55e" else "#ef4444",
-                          "width": 1, "dash": "dot"},
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
 
     fig.update_layout(
         height=400, margin={"l": 0, "r": 0, "t": 10, "b": 0},
@@ -553,7 +564,7 @@ def render_open_position(data: dict[str, Any]) -> None:
     )
 
 def render_trade_log(data: dict[str, Any]) -> None:
-    """Full trade log with color-tinted rows."""
+    """Full trade log with WIN/LOSS badges and color-tinted rows."""
     trades = data.get("trades", [])
     if not trades:
         st.caption("Trade log: — not yet tracked —")
@@ -561,16 +572,20 @@ def render_trade_log(data: dict[str, Any]) -> None:
 
     rows = []
     for t in reversed(trades[-50:]):  # Last 50 trades
-        pnl = t.get("net_pnl", 0) or 0
+        pnl = (t.get("net_pnl") or 0)
         is_win = pnl > 0
+        direction = t.get("direction", "—")
+        exit_reason = (t.get("exit_reason") or "—").replace("_", " ")
+        badge = f'<span style="color:#22c55e;font-weight:600;">WIN</span>' if is_win else f'<span style="color:#ef4444;font-weight:600;">LOSS</span>'
         rows.append({
+            "Result": badge,
             "Time": (t.get("exit_time") or t.get("timestamp") or "")[:16] if t.get("exit_time") else (t.get("timestamp") or "")[:16],
-            "Direction": t.get("direction", "—"),
+            "Direction": direction,
             "Entry": f"${t['entry_price']:,.2f}" if t.get("entry_price") else "—",
             "Exit": f"${t['exit_price']:,.2f}" if t.get("exit_price") else "—",
             "R": f"{t['r_multiple']:+.4f}" if t.get("r_multiple") is not None else "—",
             "PnL": f"${pnl:+,.2f}",
-            "Exit Reason": (t.get("exit_reason") or "—").replace("_", " "),
+            "Exit Reason": exit_reason,
             "_win": is_win,
         })
 
@@ -579,15 +594,23 @@ def render_trade_log(data: dict[str, Any]) -> None:
         st.caption("Trade log: — not yet tracked —")
         return
 
-    # Color-tinted rows
+    # Color-tinted rows with WIN/LOSS badges
     def _row_style(row: pd.Series) -> list[str]:
         if row.get("_win", False):
             return ["background-color: rgba(22,163,74,0.08)"] * len(row)
         return ["background-color: rgba(220,38,38,0.06)"] * len(row)
 
-    display_cols = ["Time", "Direction", "Entry", "Exit", "R", "PnL", "Exit Reason"]
+    display_cols = ["Result", "Time", "Direction", "Entry", "Exit", "R", "PnL", "Exit Reason"]
     styled = df[display_cols].style.apply(_row_style, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, use_container_width=True, hide_index=True, column_config={
+        "Result": st.column_config.TextColumn("Result", width="small"),
+        "Direction": st.column_config.TextColumn("Dir", width="small"),
+        "Entry": st.column_config.TextColumn("Entry", width="small"),
+        "Exit": st.column_config.TextColumn("Exit", width="small"),
+        "R": st.column_config.TextColumn("R", width="small"),
+        "PnL": st.column_config.TextColumn("PnL", width="small"),
+        "Exit Reason": st.column_config.TextColumn("Exit", width="medium"),
+    })
 
 def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> None:
     """Side-by-side D4 | D7 comparison card.
@@ -614,7 +637,7 @@ def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> Non
                     <td style="text-align:right;font-weight:600;">{d4.get('profit_factor', 0):.3f}</td></tr>
                 <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
                     <td style="text-align:right;font-weight:600;">{d4.get('win_rate', 0)*100:.1f}%</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL</td>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL (all-time)</td>
                     <td style="text-align:right;font-weight:600;">${(d4.get('total_pnl', 0) or 0):+,.2f}</td></tr>
                 <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
                     <td style="text-align:right;font-weight:600;">${d4.get('equity', 0):,.2f}</td></tr>
@@ -655,7 +678,7 @@ def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> Non
                     <td style="text-align:right;font-weight:600;">{d7.get('pf', 0):.3f}</td></tr>
                 <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
                     <td style="text-align:right;font-weight:600;">{d7.get('wr', 0)*100:.1f}%</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL</td>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL (all-time)</td>
                     <td style="text-align:right;font-weight:600;">${(d7.get('total_pnl', 0) or 0):+,.2f}</td></tr>
                 <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
                     <td style="text-align:right;font-weight:600;">${d7.get('equity', 0):,.2f}</td></tr>
@@ -685,7 +708,7 @@ def main():
         st.metric("Status", data["status"])
         if data["trade_count"] > 0:
             pnl_total = data.get("total_pnl", 0) or 0
-            st.metric("Total PnL", f"${pnl_total:+,.2f}")
+            st.metric("Total PnL (all-time)", f"${pnl_total:+,.2f}")
 
     # D4 vs D7 side-by-side comparison
     render_comparison_card(data, d7_data)
