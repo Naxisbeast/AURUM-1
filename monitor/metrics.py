@@ -12,7 +12,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from aurum1.execution import PaperBroker
 
 
 def load_equity_curve(db_path: str) -> pd.DataFrame:
@@ -140,7 +139,6 @@ def compute_drawdown_curve(
 
 def get_system_status(
     db_path: str,
-    paper_broker: PaperBroker | None,
     settings: dict,
 ) -> dict[str, Any]:
     """Return the dashboard status-bar fields without mutating system state."""

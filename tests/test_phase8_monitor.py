@@ -101,7 +101,6 @@ def test_get_system_status_returns_required_keys() -> None:
 
         status = get_system_status(
             str(db_path),
-            None,
             {
                 "broker": {"paper_trade": True, "paper_initial_equity": 10000.0},
                 "risk": {"daily_loss_kill_pct": 0.03, "total_drawdown_kill_pct": 0.08},
