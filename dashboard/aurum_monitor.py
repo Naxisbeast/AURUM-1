@@ -407,54 +407,30 @@ def render_equity_chart(data: dict[str, Any]) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 def render_price_chart(data: dict[str, Any]) -> None:
-    """Price chart with real OHLC close-price line + trade entry/exit markers.
+    """Trade chart with equity curve as background + trade markers on equity.
 
-    Marker legend:
-    - ▲ green triangle = BUY entry
-    - ▼ red triangle = SELL entry
-    - ◆ white diamond = WIN exit
-    - ◆ black diamond = LOSS exit
+    Old-style visualization: each trade is a colored marker (green BUY, red SELL)
+    with connecting vertical line, plotted against the equity curve.
+    Hover shows entry/exit price, R-multiple, and PnL.
     """
     trades = data.get("trades", [])
+    eq = data.get("equity_curve", pd.DataFrame())
+
     if not trades:
         st.caption("Price chart: no trades to plot")
         return
 
-    # Load OHLC close prices from the forward shadow cache
-    MARKET_CACHE = ROOT / "aurum1" / "data" / "forward_shadow_market_cache.sqlite3"
-    price_df = pd.DataFrame()
-    if MARKET_CACHE.exists():
-        try:
-            conn = sqlite3.connect(f"file:{MARKET_CACHE}?mode=ro", uri=True)
-            price_df = pd.read_sql_query(
-                "SELECT timestamp, close FROM ohlcv_M15 ORDER BY timestamp",
-                conn,
-            )
-            conn.close()
-            price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], utc=True)
-            price_df["close"] = pd.to_numeric(price_df["close"], errors="coerce")
-        except Exception:
-            pass
-
     fig = go.Figure()
 
-    # Plot real close-price line if available
-    if not price_df.empty:
+    # Equity curve as thin background reference
+    if not eq.empty:
         fig.add_trace(go.Scatter(
-            x=price_df["timestamp"], y=price_df["close"],
-            mode="lines",
-            line={"color": "#475569", "width": 1},
-            name="XAU/USD",
-            hoverinfo="skip",
+            x=eq["timestamp"], y=eq["equity"],
+            mode="lines", name="Equity",
+            line={"color": "rgba(79, 138, 245, 0.4)", "width": 1},
         ))
 
-    # Collect trade markers — use slight jitter for overlapping price levels
-    import random
-    rng = random.Random(42)
-
-    entry_times, entry_prices, entry_colors, entry_symbols, entry_labels = [], [], [], [], []
-    exit_times, exit_prices, exit_colors, exit_symbols, exit_labels = [], [], [], [], []
-
+    # Plot each trade: entry marker + exit marker + connecting line
     for t in trades:
         entry_time = t.get("entry_time") or t.get("timestamp")
         exit_time = t.get("exit_time")
@@ -463,73 +439,74 @@ def render_price_chart(data: dict[str, Any]) -> None:
         direction = t.get("direction", "BUY")
         pnl = (t.get("net_pnl") or 0)
         is_win = pnl > 0
+        rr = t.get("r_multiple")
 
-        if entry_time and entry_price:
-            try:
-                ts = pd.Timestamp(entry_time)
-                r_multiple = t.get("r_multiple")
-                r_str = f"R={r_multiple:+.3f}" if r_multiple else ""
-                entry_times.append(ts)
-                entry_prices.append(entry_price)
-                entry_colors.append("#22c55e" if direction == "BUY" else "#ef4444")
-                entry_symbols.append("triangle-up" if direction == "BUY" else "triangle-down")
-                entry_labels.append(
-                    f"Entry {direction}<br>${entry_price:.2f}<br>{r_str}"
-                )
-            except Exception:
-                pass
+        if not entry_time or not entry_price or entry_price <= 0:
+            continue
 
-        if exit_time and exit_price:
-            try:
-                ts = pd.Timestamp(exit_time)
-                exit_times.append(ts)
-                exit_prices.append(exit_price)
-                exit_colors.append("#22c55e" if is_win else "#ef4444")
-                exit_symbols.append("diamond" if is_win else "diamond")
-                exit_labels.append(
-                    f"{'WIN' if is_win else 'LOSS'}<br>"
-                    f"Exit @ ${exit_price:.2f}<br>"
-                    f"PnL: ${pnl:+,.2f}"
-                )
-            except Exception:
-                pass
+        try:
+            ts = pd.Timestamp(entry_time)
+        except Exception:
+            continue
 
-    if not entry_times:
-        st.caption("Price chart: no valid trade timestamps")
-        return
+        # Color and shape
+        if direction == "BUY":
+            entry_symbol = "triangle-up"
+        else:
+            entry_symbol = "triangle-down"
+        color = "#22c55e" if is_win else "#ef4444"
+        label = "WIN" if is_win else "LOSS"
 
-    # Entry markers (no connecting lines)
-    fig.add_trace(go.Scatter(
-        x=entry_times, y=entry_prices,
-        mode="markers",
-        marker={"size": 10, "color": entry_colors, "symbol": entry_symbols,
-                "line": {"width": 1, "color": "white"}},
-        name="Entry",
-        text=entry_labels,
-        hovertemplate="%{text}<extra></extra>",
-    ))
+        # Find equity value at trade time for y-axis positioning
+        eq_val = None
+        if not eq.empty:
+            eq_ts = pd.to_datetime(eq["timestamp"], utc=True)
+            trade_ts = ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC")
+            closest = (eq_ts - trade_ts).abs().idxmin()
+            eq_val = float(eq.iloc[closest]["equity"])
 
-    # Exit markers
-    if exit_times:
+        if eq_val:
+            y_val = eq_val
+        else:
+            y_val = 10000 + (pnl * 5)
+
+        hover = (
+            f"{'🟢' if is_win else '🔴'} {direction} {label}<br>"
+            f"Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f}<br>"
+            f"R: {rr:+.2f} | PnL: ${pnl:+.2f}"
+        )
+
+        # Connecting vertical line
         fig.add_trace(go.Scatter(
-            x=exit_times, y=exit_prices,
+            x=[ts, ts],
+            y=[y_val - 10, y_val + 10],
+            mode="lines",
+            line={"color": color, "width": 3},
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+        # Entry marker
+        fig.add_trace(go.Scatter(
+            x=[ts], y=[y_val],
             mode="markers",
-            marker={"size": 9, "color": exit_colors, "symbol": exit_symbols,
-                    "line": {"width": 1, "color": "white"}},
-            name="Exit",
-            text=exit_labels,
-            hovertemplate="%{text}<extra></extra>",
+            marker={"symbol": entry_symbol, "size": 14, "color": color,
+                    "line": {"color": "white", "width": 1.5}},
+            name=hover,
+            hovertext=hover,
+            hoverinfo="text",
+            showlegend=False,
         ))
 
     fig.update_layout(
         height=400, margin={"l": 0, "r": 0, "t": 10, "b": 0},
-        hovermode="x unified",
+        hovermode="closest",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         font={"color": "#e2e8f0"},
         legend={"orientation": "h", "y": 1.1},
     )
     fig.update_xaxes(showgrid=False, title_text="")
-    fig.update_yaxes(showgrid=True, gridcolor="#334155", title_text="Price ($)")
+    fig.update_yaxes(showgrid=True, gridcolor="#334155", title_text="Equity ($)")
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -564,28 +541,34 @@ def render_open_position(data: dict[str, Any]) -> None:
     )
 
 def render_trade_log(data: dict[str, Any]) -> None:
-    """Full trade log with WIN/LOSS badges and color-tinted rows."""
+    """Trade log — clean old-style table with colored rows and WIN/LOSS tags."""
     trades = data.get("trades", [])
     if not trades:
         st.caption("Trade log: — not yet tracked —")
         return
 
     rows = []
-    for t in reversed(trades[-50:]):  # Last 50 trades
+    for t in reversed(trades[-50:]):
         pnl = (t.get("net_pnl") or 0)
         is_win = pnl > 0
-        direction = t.get("direction", "—")
         exit_reason = (t.get("exit_reason") or "—").replace("_", " ")
-        badge = f'<span style="color:#22c55e;font-weight:600;">WIN</span>' if is_win else f'<span style="color:#ef4444;font-weight:600;">LOSS</span>'
+
+        entry_str = f"${t['entry_price']:,.2f}" if t.get("entry_price") else "—"
+        exit_str = f"${t['exit_price']:,.2f}" if t.get("exit_price") else "—"
+        r_str = f"{t['r_multiple']:+.2f}" if t.get("r_multiple") is not None else "—"
+        pnl_str = f"${pnl:+,.2f}"
+        time_str = (t.get("exit_time") or t.get("timestamp") or "")[:16] if t.get("exit_time") else (t.get("timestamp") or "")[:16]
+        badge = "✅" if is_win else "❌"
+
         rows.append({
-            "Result": badge,
-            "Time": (t.get("exit_time") or t.get("timestamp") or "")[:16] if t.get("exit_time") else (t.get("timestamp") or "")[:16],
-            "Direction": direction,
-            "Entry": f"${t['entry_price']:,.2f}" if t.get("entry_price") else "—",
-            "Exit": f"${t['exit_price']:,.2f}" if t.get("exit_price") else "—",
-            "R": f"{t['r_multiple']:+.4f}" if t.get("r_multiple") is not None else "—",
-            "PnL": f"${pnl:+,.2f}",
-            "Exit Reason": exit_reason,
+            "": badge,
+            "Time": time_str,
+            "Dir": t.get("direction", "—"),
+            "Entry": entry_str,
+            "Exit": exit_str,
+            "R": r_str,
+            "PnL": pnl_str,
+            "Exit": exit_reason,
             "_win": is_win,
         })
 
@@ -594,23 +577,14 @@ def render_trade_log(data: dict[str, Any]) -> None:
         st.caption("Trade log: — not yet tracked —")
         return
 
-    # Color-tinted rows with WIN/LOSS badges
-    def _row_style(row: pd.Series) -> list[str]:
+    def _row_style(row):
         if row.get("_win", False):
             return ["background-color: rgba(22,163,74,0.08)"] * len(row)
         return ["background-color: rgba(220,38,38,0.06)"] * len(row)
 
-    display_cols = ["Result", "Time", "Direction", "Entry", "Exit", "R", "PnL", "Exit Reason"]
-    styled = df[display_cols].style.apply(_row_style, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True, column_config={
-        "Result": st.column_config.TextColumn("Result", width="small"),
-        "Direction": st.column_config.TextColumn("Dir", width="small"),
-        "Entry": st.column_config.TextColumn("Entry", width="small"),
-        "Exit": st.column_config.TextColumn("Exit", width="small"),
-        "R": st.column_config.TextColumn("R", width="small"),
-        "PnL": st.column_config.TextColumn("PnL", width="small"),
-        "Exit Reason": st.column_config.TextColumn("Exit", width="medium"),
-    })
+    display = ["", "Time", "Dir", "Entry", "Exit", "R", "PnL", "Exit"]
+    styled = df[display].style.apply(_row_style, axis=1)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> None:
     """Side-by-side D4 | D7 comparison card.
