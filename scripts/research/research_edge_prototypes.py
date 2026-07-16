@@ -188,6 +188,7 @@ def build_research_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     frame["atr_percentile_100"] = frame["atr_14"].rolling(100, min_periods=100).apply(
         lambda values: pd.Series(values).rank(pct=True).iloc[-1]
     )
+    frame["adx_14"] = adx_wilder(high, low, close, 14)
     frame["recent_low_5"] = low.rolling(5, min_periods=5).min()
     frame["recent_high_5"] = high.rolling(5, min_periods=5).max()
     hours = frame.index.hour
@@ -946,6 +947,30 @@ def atr_wilder(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -
         axis=1,
     ).max(axis=1)
     return true_range.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
+
+def adx_wilder(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
+    """Compute Wilder's ADX (Average Directional Index)."""
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0.0), up_move, 0.0),
+        index=high.index,
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0.0), down_move, 0.0),
+        index=high.index,
+    )
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr.replace(0.0, np.nan)
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr.replace(0.0, np.nan)
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    return dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
 
 if __name__ == "__main__":
