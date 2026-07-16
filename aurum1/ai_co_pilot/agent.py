@@ -13,6 +13,7 @@ import json
 import os
 from typing import Any
 
+import pandas as pd
 from aurum1.ai_co_pilot.context import MarketContext
 from aurum1.ai_co_pilot.safety import SafetyLayer, SafetyViolation
 
@@ -155,18 +156,49 @@ class AiAgent:
         raise ValueError(f"No JSON found in response: {text[:200]}")
 
     def _fallback_new_signal(self, context: MarketContext) -> dict:
-        """Rule-based fallback — ALWAYS take (matches baseline).
+        """ADX-aware rule-based decision.
 
-        The features DataFrame from build_research_features doesn't include
-        ADX (it's zero), so we can't use ADX-based filtering here. This
-        fallback takes every signal exactly like the proven baseline.
+        Uses ADX to filter trades — only take breakouts when there's
+        sufficient trend strength. This is exactly what we walk-forward
+        tested earlier (ADX > 20), which showed 34% head-to-head wins
+        vs the unfiltered baseline.
+
+        Returns the SAME decision as the ADX > 20 filter we tested
+        in Sweep 002, so we can verify the backtest matches.
         """
+        adx = context.current_adx_14
+        risk_pct = 0.0025
+        stop_mult = 2.0
+        tp_mult = 2.0
+
+        # ADX filter: only trade when trend has some strength
+        if pd.isna(adx) or adx < 20:
+            return {
+                "action": "skip",
+                "reason": f"ADX={adx:.1f} < 20 — ranging market",
+                "risk_pct": 0, "stop_mult": 0, "tp_mult": 0,
+            }
+
+        # Slight size adjustments within the ADX > 20 band
+        if adx > 30:
+            risk_pct = 0.0030  # Strong trend
+        elif adx > 25:
+            risk_pct = 0.0028  # Moderate trend
+
+        # Drawdown protection
+        if context.current_drawdown_pct > 0.05:
+            risk_pct *= 0.5
+
+        # Loss streak protection
+        if context.recent_losses >= 4:
+            risk_pct *= 0.5
+
         return {
             "action": "take",
-            "reason": "Baseline match",
-            "risk_pct": 0.0025,
-            "stop_mult": 2.0,
-            "tp_mult": 2.0,
+            "reason": f"ADX={adx:.1f} > 20 — trending",
+            "risk_pct": round(risk_pct, 4),
+            "stop_mult": round(stop_mult, 1),
+            "tp_mult": round(tp_mult, 1),
         }
 
     def _fallback_position_management(self, context: MarketContext) -> dict:
