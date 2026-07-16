@@ -56,8 +56,16 @@ File: `dashboard/aurum_monitor.py`
 | D7 DB | Doesn't exist | **Entire D7 section hidden** |
 | `paper_trading.sqlite3` | Doesn't exist | **"NO DATA"** status, "Paper trading database not found" detail |
 
+### Comparison Card (added per addendum)
+- Side-by-side D4 | D7 with days live, trade count, PF, WR, PnL, equity
+- D7 shows "early sample" label when days_live < 3
+- D7 shows "Trades computed from historical cache — not live yet" on day 0
+- Maturity gap is explicit: D4 head start of 14 days is shown as "Day 14 · 24 trades" vs D7 "Day 0 · early sample · 1094 trades"
+- D7 dedup fixed (INSERT OR IGNORE) to prevent duplicate trades across timer runs
+- No blended equity curves, no hidden data gaps
+
 ### Not Built (as specified)
-- D7 comparison view: **built as aggregate only** (per audit constraint — per-trade D7 analysis needs more data history)
+- D7 per-trade detail view: **not built** — needs more live data history
 - Decision artifacts / entry checklist: **not built** — depends on Phase 3+ logging
 - Audit log of state changes: **not built** — depends on Phase 4 logging
 - Promotion gate tracking: **not built** — data doesn't exist
