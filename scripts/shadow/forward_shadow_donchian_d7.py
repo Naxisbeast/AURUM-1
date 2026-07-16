@@ -39,10 +39,21 @@ def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--market-db", type=Path, default=DEFAULT_MARKET_DB)
     p.add_argument("--json", action="store_true")
+    p.add_argument("--start", type=str, default=None, help="Start date (ISO format, inclusive)")
+    p.add_argument("--end", type=str, default=None, help="End date (ISO format, inclusive)")
     args = p.parse_args(argv)
     settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
     ohlcv = load_ohlcv("M15", args.market_db)
     if ohlcv.empty: print("ERROR: No M15 data"); return 1
+
+    # Trim to date range if specified (e.g. to match D4's live window)
+    if args.start:
+        ohlcv = ohlcv[ohlcv.index >= pd.Timestamp(args.start, tz=UTC)]
+    if args.end:
+        ohlcv = ohlcv[ohlcv.index <= pd.Timestamp(args.end, tz=UTC)]
+    if len(ohlcv) < 500:
+        print(f"ERROR: Only {len(ohlcv)} candles after date trim, need > 500"); return 1
+
     features = build_research_features(ohlcv)
     spec = InstrumentSpec.from_settings(settings)
     sp = 1.5; slip = 0.5; sd = slip * spec.pip_size
