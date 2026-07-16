@@ -1,3 +1,6 @@
+# Experiment results & databases
+experiments/results/
+
 # Secrets and local environment
 .env
 .env.*
