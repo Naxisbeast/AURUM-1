@@ -164,7 +164,7 @@ def _init_d7_db() -> None:
         with conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS d7_trades (
-                    signal_time TEXT PRIMARY KEY,
+                    signal_time TEXT,
                     entry_time TEXT,
                     exit_time TEXT,
                     strategy TEXT,
@@ -185,7 +185,7 @@ def _init_d7_db() -> None:
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS d7_equity_curve (
-                    timestamp TEXT PRIMARY KEY,
+                    timestamp TEXT,
                     equity REAL
                 )
             """)
@@ -206,14 +206,14 @@ def _persist_d7_run(trades_log: list[dict[str, Any]], equity_log: list[dict[str,
                 col_names = ",".join(columns)
                 for t in trades_log:
                     conn.execute(
-                        f"INSERT OR IGNORE INTO d7_trades ({col_names}) VALUES ({placeholders})",
+                        f"INSERT INTO d7_trades ({col_names}) VALUES ({placeholders})",
                         [t.get(c) for c in columns],
                     )
             if equity_log:
                 # Only persist every 20th bar to keep DB small (M15 = 96/day, 5 rows/day is plenty)
                 for entry in equity_log[::20]:
                     conn.execute(
-                        "INSERT OR IGNORE INTO d7_equity_curve (timestamp, equity) VALUES (?, ?)",
+                        "INSERT OR REPLACE INTO d7_equity_curve (timestamp, equity) VALUES (?, ?)",
                         [entry["timestamp"].isoformat() if hasattr(entry["timestamp"], "isoformat") else str(entry["timestamp"]),
                          entry["equity"]],
                     )

@@ -77,7 +77,6 @@ def load_overview() -> dict[str, Any]:
         "trade_count": 0, "win_count": 0, "loss_count": 0,
         "profit_factor": None, "win_rate": None, "current_dd": None,
         "avg_r": None, "total_pnl": None,
-        "days_live": 0,
         "trades": [],
         "equity_curve": pd.DataFrame(),
         "daily_kill": False, "dd_kill": False,
@@ -155,15 +154,6 @@ def load_overview() -> dict[str, Any]:
         if trades_list:
             result["last_trade_time"] = trades_list[-1].get("exit_time") or trades_list[-1].get("timestamp")
 
-    # Days live from first account_snapshot
-    first_snap = _fetchone(conn, "SELECT timestamp FROM account_snapshots ORDER BY id ASC LIMIT 1")
-    if first_snap:
-        try:
-            d4_start = pd.Timestamp(first_snap["timestamp"], tz=UTC)
-            result["days_live"] = max(1, (datetime.now(UTC) - d4_start).days)
-        except Exception:
-            result["days_live"] = 0
-
     # Equity curve
     snap_rows = _fetchall(conn, "SELECT timestamp, equity, peak_equity, daily_pnl FROM account_snapshots ORDER BY id")
     if snap_rows:
@@ -208,17 +198,11 @@ def load_d7_aggregate() -> dict[str, Any] | None:
         pf = gross_win / gross_loss if gross_loss > 0 else None
         total_pnl = sum((t["net_pnl"] or 0) for t in trades)
         equity = equity_rows[0]["equity"] if equity_rows else None
-        # Days live: D7 launched 2026-07-16
-        d7_launch = pd.Timestamp("2026-07-16", tz=UTC)
-        days_live = max(0, (datetime.now(UTC) - d7_launch).days)
-        is_early = days_live < 3  # Early if running less than 3 days
-
         result = {
             "trades": trade_count, "wins": win_count, "losses": loss_count,
             "pf": pf, "total_pnl": total_pnl,
             "wr": win_count / trade_count if trade_count > 0 else None,
             "equity": equity,
-            "days_live": days_live, "is_early": is_early,
         }
         conn.close()
         return result
@@ -458,81 +442,20 @@ def render_trade_log(data: dict[str, Any]) -> None:
     styled = df[display_cols].style.apply(_row_style, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> None:
-    """Side-by-side D4 | D7 comparison card.
-
-    D7 is in early launch phase — shows days live and sample size
-    prominently so the maturity gap is clear, not disguised.
-    """
-    st.subheader("System Comparison")
-    st.caption("D4 has a significant head start. Days live and trade counts are shown alongside performance metrics to make the maturity gap visible.")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        d4_days = d4.get("days_live", 0)
-        st.markdown(
-            f"""
-            <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
-              <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D4 (20-bar Donchian)</div>
-              <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:12px;">
-                Live · Day {d4_days} · {d4.get('trade_count', 0)} trades
-              </div>
-              <table style="width:100%;border-collapse:collapse;">
-                <tr><td style="padding:4px 0;color:#94a3b8;">PF</td>
-                    <td style="text-align:right;font-weight:600;">{d4.get('profit_factor', 0):.3f}</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
-                    <td style="text-align:right;font-weight:600;">{d4.get('win_rate', 0)*100:.1f}%</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL</td>
-                    <td style="text-align:right;font-weight:600;">${(d4.get('total_pnl', 0) or 0):+,.2f}</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
-                    <td style="text-align:right;font-weight:600;">${d4.get('equity', 0):,.2f}</td></tr>
-              </table>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with col2:
-        if d7 is None:
-            st.markdown(
-                """
-                <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
-                  <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D7 (10-bar Donchian)</div>
-                  <div style="color:#64748b;text-align:center;padding:20px 0;">No data yet</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            return
-
-        d7_days = d7.get("days_live", 0)
-        d7_trades = d7.get("trades", 0)
-        is_early = d7_trades < 30
-        maturity_label = " — early sample" if is_early else ""
-
-        st.markdown(
-            f"""
-            <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
-              <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D7 (10-bar Donchian)</div>
-              <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:12px;">
-                Day {d7_days}{maturity_label} · {d7_trades} trades
-                { '<div style=\"color:#64748b;font-size:0.75rem;margin-top:4px;\">Trades computed from historical cache — not live yet</div>' if d7_days < 1 else '' }
-              </div>
-              <table style="width:100%;border-collapse:collapse;">
-                <tr><td style="padding:4px 0;color:#94a3b8;">PF</td>
-                    <td style="text-align:right;font-weight:600;">{d7.get('pf', 0):.3f}</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
-                    <td style="text-align:right;font-weight:600;">{d7.get('wr', 0)*100:.1f}%</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL</td>
-                    <td style="text-align:right;font-weight:600;">${(d7.get('total_pnl', 0) or 0):+,.2f}</td></tr>
-                <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
-                    <td style="text-align:right;font-weight:600;">${d7.get('equity', 0):,.2f}</td></tr>
-              </table>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+def render_d7_sidebar(data: dict[str, Any] | None) -> None:
+    """D7 aggregate KPIs in sidebar if data exists."""
+    if data is None:
+        return
+    st.sidebar.markdown("### D7 (10-bar Donchian)")
+    pf = data.get("pf")
+    st.sidebar.metric("Profit Factor", f"{pf:.3f}" if pf else "—")
+    wr = data.get("wr")
+    st.sidebar.metric("Win Rate", f"{wr*100:.1f}%" if wr else "—")
+    st.sidebar.metric("Total Trades", data.get("trades", 0))
+    st.sidebar.metric("Total PnL", f"${data['total_pnl']:+,.2f}")
+    eq = data.get("equity")
+    if eq:
+        st.sidebar.metric("Current Equity", f"${eq:,.2f}")
 
 # ── Main ──
 
@@ -556,8 +479,21 @@ def main():
             pnl_total = data.get("total_pnl", 0) or 0
             st.metric("Total PnL", f"${pnl_total:+,.2f}")
 
-    # D4 vs D7 side-by-side comparison
-    render_comparison_card(data, d7_data)
+    # D7 comparison
+    if d7_data:
+        st.subheader("D7 (10-bar Donchian) — Comparison")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        pf_d7 = d7_data.get("pf")
+        wr_d7 = d7_data.get("wr")
+        with c1: st.metric("PF", f"{pf_d7:.3f}" if pf_d7 else "—")
+        with c2: st.metric("WR", f"{wr_d7*100:.1f}%" if wr_d7 else "—")
+        with c3: st.metric("Trades", d7_data.get("trades", 0))
+        with c4:
+            pnl_d7 = d7_data.get("total_pnl", 0) or 0
+            st.metric("Total PnL", f"${pnl_d7:+,.2f}")
+        with c5:
+            eq_d7 = d7_data.get("equity")
+            st.metric("Equity", f"${eq_d7:,.2f}" if eq_d7 else "—")
 
     # Current state
     st.subheader("Current State")
