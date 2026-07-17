@@ -196,7 +196,7 @@ def load_d7_aggregate() -> dict[str, Any] | None:
         gross_win = sum(t["net_pnl"] for t in trades if t["net_pnl"] and t["net_pnl"] > 0)
         gross_loss = abs(sum(t["net_pnl"] for t in trades if t["net_pnl"] and t["net_pnl"] < 0))
         pf = gross_win / gross_loss if gross_loss > 0 else None
-        total_pnl = sum((t["net_pnl"] or 0) for t in trades)
+        total_pnl = sum(t.get("net_pnl", 0) or 0 for t in trades)
         equity = equity_rows[0]["equity"] if equity_rows else None
         result = {
             "trades": trade_count, "wins": win_count, "losses": loss_count,
