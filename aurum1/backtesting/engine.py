@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import os
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -72,6 +73,8 @@ class BacktestResult:
     equity_curve: list[float]
     drawdown_curve: list[float]
     trades: list[dict[str, Any]]
+    data_sources: list[str] | None = None
+    data_source_breakdown: dict[str, int] | None = None
 
 
 @dataclass
@@ -241,6 +244,14 @@ class BacktestEngine:
         if equity_curve:
             equity_curve[-1] = float(execution.broker.get_account_state().equity)
 
+        source_breakdown = _source_breakdown(ohlcv)
+        if source_breakdown and len(source_breakdown) > 1:
+            logger = logging.getLogger("aurum1.backtest")
+            logger.warning(
+                "Mixed data sources detected: %s. Backtest results may be inconsistent.",
+                source_breakdown,
+            )
+
         result = build_backtest_result(
             equity_curve=equity_curve,
             trades=closed_trades,
@@ -254,21 +265,31 @@ class BacktestEngine:
             signals_approved=approved,
             signals_rejected=rejected,
             rejection_reasons=dict(rejection_reasons),
+            data_sources=ohlcv.get("source", pd.Series(dtype=str)).tolist() if len(ohlcv) else None,
+            data_source_breakdown=source_breakdown,
         )
         result.trades.append({"backtest_log_size": len(backtest_log), "type": "metadata"})
         result.trades.pop()
 
-        # Integrity warning: net PnL + initial equity should roughly match final equity.
+        # Integrity check: net PnL + initial equity should roughly match final equity.
         # A mismatch indicates fee double-counting or equity not tracking trade PnL.
         pnl_total = sum(float(t.get("net_pnl", 0.0)) for t in result.trades)
         implied = initial_equity + pnl_total
         delta = result.final_equity - implied
         if abs(delta) > 1.0:
-            logging.getLogger("aurum1.backtest").warning(
+            logger = logging.getLogger("aurum1.backtest")
+            logger.warning(
                 "Fee accounting gap: implied_equity=%.2f != final_equity=%.2f (delta=%.2f). "
                 "Open position unrealised PnL or fee_in_equity mismatch.",
                 implied, result.final_equity, delta,
             )
+            # In test/verification mode, a gap > 1.0 is a hard failure
+            if os.environ.get("AURUM1_STRICT_FEE_CHECK", "0") == "1":
+                raise AssertionError(
+                    f"Fee accounting mismatch: sum(net_pnl)={pnl_total:.2f}, "
+                    f"initial={initial_equity:.2f}, final={result.final_equity:.2f}, "
+                    f"delta={delta:.2f}"
+                )
 
         return result
 
@@ -288,7 +309,9 @@ class BacktestEngine:
         when the verify_feature_causality setting is enabled.
         """
         verify = bool(self.settings.get("backtesting", {}).get("verify_feature_causality", False))
-        features = FeatureEngineer({"feature_engineering": {"lookahead_check": False}}).build_features(
+        # Use lookahead_check=True when verify is on to catch any accidental
+        # forward-looking feature computation at the FeatureEngineer level
+        features = FeatureEngineer({"feature_engineering": {"lookahead_check": verify}}).build_features(
             ohlcv,
             macro,
             cot,
@@ -371,6 +394,8 @@ def build_backtest_result(
     signals_approved: int,
     signals_rejected: int,
     rejection_reasons: dict[str, int],
+    data_sources: list[str] | None = None,
+    data_source_breakdown: dict[str, int] | None = None,
 ) -> BacktestResult:
     if not equity_curve:
         equity_curve = [initial_equity]
@@ -450,7 +475,16 @@ def build_backtest_result(
         equity_curve=[float(value) for value in adjusted_curve],
         drawdown_curve=[float(value) for value in drawdown_curve],
         trades=net_trades,
+        data_sources=data_sources,
+        data_source_breakdown=data_source_breakdown,
     )
+
+
+def _source_breakdown(ohlcv: pd.DataFrame) -> dict[str, int] | None:
+    """Extract data source breakdown from OHLCV frame if source column exists."""
+    if "source" not in ohlcv.columns or ohlcv.empty:
+        return None
+    return ohlcv["source"].astype(str).value_counts().to_dict()
 
 
 def _candle_from_row(timestamp: Any, ohlcv_row: pd.Series, feature_row: pd.Series) -> CandleRow:
@@ -781,18 +815,25 @@ def _augment_trade(
         units = 0.0
     result["units"] = units
     result["notional_ounces"] = units * instrument.ounces_per_unit
-    fee = (
-        float(result["fee"])
-        if "fee" in result
-        else 2.0
-        * float(settings.get("execution", {}).get("paper_spread_pips", 1.5))
-        * instrument.pip_value_per_unit
-        * units
-    )
-    result["fee"] = fee
-    result["spread_cost"] = float(result.get("spread_cost", fee))
-    result["gross_pnl"] = float(result.get("gross_pnl", result.get("pnl", 0.0)))
-    result["pnl_after_fees"] = float(result.get("pnl_after_fees", result["gross_pnl"] - fee))
+    # Use the fee already recorded by PaperBroker (which uses actual spread at
+    # fill time) rather than recalculating from the default paper_spread_pips.
+    # If the trade came from PaperBroker it already has fee set correctly.
+    if "fee" not in result:
+        fee = (
+            2.0
+            * float(settings.get("execution", {}).get("paper_spread_pips", 1.5))
+            * instrument.pip_value_per_unit
+            * units
+        )
+        result["fee"] = fee
+        result["spread_cost"] = fee
+        result["gross_pnl"] = float(result.get("gross_pnl", result.get("pnl", 0.0)))
+        result["net_pnl"] = result["gross_pnl"] - fee
+    else:
+        # PaperBroker already set fee and net_pnl — preserve them
+        result["spread_cost"] = float(result.get("spread_cost", result["fee"]))
+        result["gross_pnl"] = float(result.get("gross_pnl", result.get("pnl", 0.0)))
+    result["pnl_after_fees"] = float(result.get("pnl_after_fees", result["net_pnl"]))
     result["net_pnl"] = float(result.get("net_pnl", result["pnl_after_fees"]))
     result["entry_slippage_cost"] = float(result.get("entry_slippage_cost", 0.0))
     result["exit_slippage_cost"] = float(result.get("exit_slippage_cost", 0.0))

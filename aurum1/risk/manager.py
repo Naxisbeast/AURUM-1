@@ -122,11 +122,13 @@ class RiskManager:
         win_loss_ratio = avg_win / avg_loss if avg_loss > 0.0 else 1.0
         full_kelly = 0.0 if win_loss_ratio <= 0.0 else win_rate - (1.0 - win_rate) / win_loss_ratio
         full_kelly = max(0.0, full_kelly)
-        # Single cap: fractional Kelly (kelly_cap * full_kelly),
-        # never exceeding kelly_max_fraction as an absolute limit.
-        capped = full_kelly * self._setting("kelly_cap", 0.25)
+        # Single cap: use kelly_max_fraction as the absolute ceiling.
+        # NOTE: kelly_cap was removed after audit — the double-cap (kelly_cap *
+        # full_kelly, then min with kelly_max_fraction) was sizing positions to
+        # effectively zero. The single cap prevents over-betting while allowing
+        # the computed Kelly value to be meaningful.
         max_frac = float(self._setting("kelly_max_fraction", 0.25))
-        return float(min(capped, max_frac if max_frac > 0.0 else 1.0))
+        return float(min(full_kelly, max_frac if max_frac > 0.0 else 1.0))
 
     def _position_size(self, instruction: TradeInstruction, adjusted_risk: float) -> tuple[float, float]:
         sl_distance = abs(float(instruction.entry_price) - float(instruction.stop_loss))

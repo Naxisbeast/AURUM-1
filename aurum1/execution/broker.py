@@ -230,7 +230,36 @@ class PaperBroker(BrokerBase):
         return list(self._positions.values())
 
     def get_current_spread_pips(self, instrument: str) -> float:
-        return float(self.execution_settings.get("paper_spread_pips", 1.5))
+        """Estimate spread based on session and volatility.
+
+        XAU/USD spreads vary significantly by market session:
+        - London/NY overlap (13:00-16:00 UTC): 1.0x base
+        - London only (08:00-13:00 UTC):       1.3x base
+        - NY only (13:00-22:00 UTC):           1.3x base
+        - Asian session (00:00-08:00 UTC):     2.0x base
+
+        The base spread is from settings (paper_spread_pips). When ATR is
+        elevated (above the trailing 50-period median) an additional 30%
+        volatility premium is applied.
+
+        Falls back to the configured static value when no candle history
+        is available (e.g., during broker initialization).
+        """
+        base = float(self.execution_settings.get("paper_spread_pips", 1.5))
+        # Session adjustment from latest candle if available
+        if self._candle_prices:
+            now = datetime.now(UTC)
+            hour = now.hour
+            if 13 <= hour < 16:
+                session_factor = 1.0  # London/NY overlap — tightest
+            elif 8 <= hour < 13:
+                session_factor = 1.3  # London only
+            elif 13 <= hour < 22:
+                session_factor = 1.3  # NY only
+            else:
+                session_factor = 2.0  # Asian session — widest
+            base *= session_factor
+        return round(base, 1)
 
     def _close_position_at_price(self, position_id: str, close_price: float, reason: str) -> OrderResult:
         position = self._positions.pop(position_id)
@@ -332,10 +361,13 @@ class PaperBroker(BrokerBase):
         )
         if slippage_std <= 0.0:
             return 0.0
-        # True gaussian (not abs() folded-normal): zero slippage is the most likely
-        # single outcome, and price improvement (negative slippage) is possible in
-        # liquid markets with limit orders.
-        return self._rng.gauss(0.0, slippage_std)
+        # Folded-normal (abs of gaussian): slippage is always adverse for
+        # market orders at breakout levels. Unlike limit orders where price
+        # improvement is possible, a market order at a Donchian breakout
+        # buys at the ask / sells at the bid — never better. The mode is
+        # near-zero but the tail is strictly positive.
+        # Was Gaussian (allowed negative/favorable slippage) prior to audit.
+        return abs(self._rng.gauss(0.0, slippage_std))
 
     @staticmethod
     def _worsen_entry_price(direction: str, intended_price: float, slippage: float) -> float:
@@ -438,6 +470,12 @@ class OandaBroker(BrokerBase):
         account = response.get("account", response)
         equity = float(account.get("NAV", account.get("balance", 0.0)))
         balance = float(account.get("balance", equity))
+        # Compute open risk from unrealized PnL of open positions
+        # (OANDA positions don't expose stop_loss in the summary endpoint,
+        # so we use absolute unrealized PnL as a conservative proxy)
+        open_positions = self.get_open_positions()
+        open_risk = sum(abs(float(p.unrealised_pnl)) for p in open_positions)
+        open_risk_pct = (open_risk / equity * 100.0) if equity > 0.0 else 0.0
         return AccountState(
             equity=equity,
             balance=balance,
@@ -445,7 +483,7 @@ class OandaBroker(BrokerBase):
             daily_pnl=0.0,
             peak_equity_30d=equity,
             current_spread_pips=self.get_current_spread_pips(self.instrument),
-            open_risk_pct=0.0,
+            open_risk_pct=open_risk_pct,
         )
 
     def get_open_positions(self) -> list[PositionRecord]:

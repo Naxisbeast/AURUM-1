@@ -567,6 +567,8 @@ def init_shadow_db(path: Path, settings: dict[str, Any]) -> None:
     path = ROOT / path if not path.is_absolute() else path
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS shadow_config (
@@ -666,6 +668,8 @@ def init_shadow_db(path: Path, settings: dict[str, Any]) -> None:
 def write_shadow_state(path: Path, state: ShadowState, settings: dict[str, Any], start_date: str | None) -> None:
     path = ROOT / path if not path.is_absolute() else path
     with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         signal_payloads = [asdict(signal) for signal in state.signals]
         trade_payloads = [asdict(trade) for trade in state.trades]
         candle_payloads = [asdict(candle) for candle in state.candles]
@@ -761,6 +765,8 @@ def record_event(path: Path, event_type: str, severity: str, message: str, detai
     path = ROOT / path if not path.is_absolute() else path
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS shadow_events (
@@ -795,6 +801,8 @@ def status_report(shadow_db: Path, *, as_of: pd.Timestamp | str | None = None) -
             "runtime_environment": runtime_environment_status(),
         }
     with sqlite3.connect(shadow_db) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         def scalar(query: str, default: Any = None, params: tuple[Any, ...] = ()) -> Any:
             row = conn.execute(query, params).fetchone()
             return row[0] if row and row[0] is not None else default
