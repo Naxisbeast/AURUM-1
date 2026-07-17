@@ -279,9 +279,6 @@ def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: di
 
 def render_trade_log(trades: pd.DataFrame) -> None:
     st.subheader("Trade Log")
-
-
-def load_trade_log(db_path: str) -> pd.DataFrame:
     if trades.empty:
         st.info("No trade records yet.")
         return
