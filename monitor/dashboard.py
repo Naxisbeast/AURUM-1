@@ -229,6 +229,57 @@ def render_rolling_metrics(equity_curve: pd.DataFrame, trades: pd.DataFrame, win
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_r_distribution(trades: pd.DataFrame) -> None:
+    """R-multiple distribution panel: histogram, cumulative R, streaks."""
+    from monitor.metrics import compute_r_distribution
+
+    st.subheader("R-Multiple Distribution")
+    stats = compute_r_distribution(trades)
+
+    if stats["n_trades"] == 0:
+        st.info("No trade data yet.")
+        return
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Cumulative R", f"{stats['cumulative_r']:+.2f}")
+    col2.metric("Avg R", f"{stats['r_mean']:+.4f}" if stats['r_mean'] != 0 else "0")
+    col3.metric("R Sharpe", f"{stats['r_sharpe']:.3f}")
+    col4.metric("Win Rate", f"{stats['win_rate']:.1%}")
+    col5.metric("N Trades", str(stats['n_trades']))
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Avg Win R", f"+{stats['avg_win_r']:.3f}")
+    col2.metric("Avg Loss R", f"{stats['avg_loss_r']:.3f}")
+    col3.metric("Consecutive Wins", str(stats.get("max_consecutive_wins", 0)))
+    col4.metric("Consecutive Losses", str(stats.get("max_consecutive_losses", 0)))
+    col5.metric("R Median", f"{stats['r_median']:.4f}")
+
+    # R-multiple histogram
+    r_values = pd.to_numeric(
+        trades.get("r_multiple", trades.get("r", pd.Series(dtype=float))),
+        errors="coerce",
+    ).dropna()
+
+    if len(r_values) > 0:
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=r_values, nbinsx=30, marker_color="#3b82f6"))
+        fig.add_vline(x=0, line_dash="dash", line_color="#ef4444")
+        fig.add_vline(x=2.0, line_dash="dash", line_color="#22c55e", annotation_text="TP")
+        fig.add_vline(x=-1.0, line_dash="dash", line_color="#ef4444", annotation_text="SL")
+        fig.update_layout(
+            height=220, margin=dict(l=20, r=20, t=10, b=30),
+            xaxis_title="R-multiple", yaxis_title="Trades",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Deciles table
+    if "r_deciles" in stats and stats["r_deciles"]:
+        st.caption("R-multiple Deciles")
+        decile_data = {f"P{k}": v for k, v in stats["r_deciles"].items()}
+        decile_df = pd.DataFrame([decile_data])
+        st.dataframe(decile_df, use_container_width=True, hide_index=True)
+
+
 def render_open_positions(db_path: str) -> None:
     """Read open positions from paper_trading DB (no broker creation)."""
     st.subheader("Open Positions")
