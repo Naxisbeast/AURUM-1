@@ -271,15 +271,35 @@ def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: di
     left, right = st.columns([0.52, 0.48])
     with left:
         st.write(f"Current MachineState: **{signal.get('machine_state', 'SCANNING')}**")
-        st.write(f"Current regime: **{signal.get('regime', 'RANGING')}**")
-        st.write(f"Regime confidence: **{float(signal.get('regime_confidence', 0.0)):.0%}**")
-        st.write(f"Last ensemble score: **{float(signal.get('raw_score', 0.0)):.2f}**")
         st.write(f"Last signal direction: **{signal.get('direction', 'FLAT')}**")
         st.write(f"Last signal timestamp: **{_format_timestamp(signal.get('timestamp'))}**")
-        st.write(f"Sentiment quality: **{signal.get('sentiment_quality', 'empty')}**")
-        st.write(f"Sentiment scalar: **{float(signal.get('sentiment_scalar', 0.0)):.2f}**")
+        st.write(f"Last R-multiple: **{signal.get('r_multiple', '—')}**")
+        st.write(f"Last PnL: **${float(signal.get('pnl', 0.0)):+,.2f}**")
         st.write(f"Blackout status: **{'active' if status.get('blackout_active') else 'clear'}**")
         st.write(f"Next high-impact event: **{event}**")
+    with right:
+        score = float(signal.get("raw_score", 0.0))
+        fig = go.Figure(
+            go.Indicator(
+                mode="gauge+number",
+                value=score,
+                domain={"x": [0, 1], "y": [0, 1]},
+                gauge={
+                    "axis": {"range": [-1.0, 1.0]},
+                    "bar": {"color": "#111827"},
+                    "steps": [
+                        {"range": [-1.0, -0.60], "color": "#fecaca"},
+                        {"range": [-0.60, 0.60], "color": "#fef3c7"},
+                        {"range": [0.60, 1.0], "color": "#bbf7d0"},
+                    ],
+                },
+            )
+        )
+        fig.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def load_trade_log(db_path: str) -> pd.DataFrame:
     with right:
         score = float(signal.get("raw_score", 0.0))
         fig = go.Figure(
@@ -464,18 +484,13 @@ def latest_signal_snapshot(trades: pd.DataFrame) -> dict[str, Any]:
     if trades.empty:
         return {}
     row = trades.iloc[-1].to_dict()
-    payload = row.get("payload", {}) if isinstance(row.get("payload"), dict) else {}
-    risk_order = payload.get("risk_order", {}) if isinstance(payload.get("risk_order"), dict) else {}
-    instruction = risk_order.get("instruction", {}) if isinstance(risk_order.get("instruction"), dict) else {}
     return {
         "machine_state": "SCANNING",
-        "regime": instruction.get("regime", row.get("regime") or "RANGING"),
-        "regime_confidence": instruction.get("confidence", 0.0),
-        "raw_score": instruction.get("signal_score", row.get("signal_score") or 0.0),
-        "direction": instruction.get("direction", row.get("direction") or "FLAT"),
+        "direction": row.get("direction", "FLAT"),
         "timestamp": row.get("timestamp"),
-        "sentiment_quality": "empty",
-        "sentiment_scalar": 0.0,
+        "r_multiple": f"{float(row.get('rr', 0)):+.2f}" if row.get("rr") and float(row.get("rr", 0)) != 0 else "—",
+        "pnl": float(row.get("pnl", 0)),
+        "raw_score": 0.0,
     }
 
 
