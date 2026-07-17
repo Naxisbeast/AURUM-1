@@ -38,7 +38,7 @@ from scripts.donchian_research_runner import (
     run_variant,
     settings_with_exit,
 )
-from scripts.research_edge_prototypes import build_research_features
+from scripts.research.research_edge_prototypes import build_research_features
 
 
 DEFAULT_OUTPUT_DIR = ROOT / "reports" / "research"

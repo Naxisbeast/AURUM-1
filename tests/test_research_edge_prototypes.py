@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from scripts.research_edge_prototypes import ResearchSignal, research_verdict, run_signal_backtest
+from scripts.research.research_edge_prototypes import ResearchSignal, research_verdict, run_signal_backtest
 
 
 def _settings() -> dict:

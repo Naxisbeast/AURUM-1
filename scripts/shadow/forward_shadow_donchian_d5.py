@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
-from scripts.research_edge_prototypes import build_research_features, atr_wilder, ema
+from scripts.research.research_edge_prototypes import build_research_features, atr_wilder, ema
 
 STRATEGY = "donchian_d5_adaptive_volfilter"
 LOOKBACK = 20; RISK_PCT = 0.0025

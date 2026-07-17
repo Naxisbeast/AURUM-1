@@ -140,7 +140,7 @@ def _run_random_control(
 
     This tests whether the strategy's edge is real (should outperform random).
     """
-    from scripts.research_edge_prototypes import (
+    from scripts.research.research_edge_prototypes import (
         basic_candle,
         random_matched_long_signals,
         run_signal_backtest,

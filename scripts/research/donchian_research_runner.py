@@ -31,7 +31,7 @@ from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.execution import PaperBroker
 from aurum1.risk import RiskManager
 from aurum1.signals import CandleRow, TradeInstruction
-from scripts.research_edge_prototypes import build_research_features
+from scripts.research.research_edge_prototypes import build_research_features
 
 
 DEFAULT_OUTPUT_DIR = ROOT / "reports" / "research"

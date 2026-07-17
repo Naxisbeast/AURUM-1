@@ -14,7 +14,7 @@ LOCAL = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(LOCAL))
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
-from scripts.research_edge_prototypes import build_research_features
+from scripts.research.research_edge_prototypes import build_research_features
 
 # TC scenarios: (spread_pips, slippage_pips, label)
 SCENARIOS = [

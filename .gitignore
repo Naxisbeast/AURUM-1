@@ -17,7 +17,7 @@ __pycache__/
 **/__pycache__/
 *.py[cod]
 *.pyc
-*.pyo
+*.po
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -29,6 +29,16 @@ __pycache__/
 .testdeps/
 .run_deps/
 .pytest_run_deps/
+.pytest_tmp/
+
+# Pytest caches at repo root
+.pytest_*/
+.pytestrun_deps/
+.run_deps/
+.deps/
+.testdeps/
+.pytestdeps/
+.pytestwheels/
 .pytest_tmp/
 
 # Runtime logs and generated reports
@@ -65,16 +75,6 @@ aurum1_deploy.zip
 **/artifacts/
 **/*.pkl
 **/*.pickle
-
-# Pytest caches at repo root
-.pytest_*/
-.pytestrun_deps/
-.run_deps/
-.deps/
-.testdeps/
-.pytestdeps/
-.pytestwheels/
-.pytest_tmp/
 
 # Editor and OS files
 .vscode/
