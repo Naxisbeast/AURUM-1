@@ -68,6 +68,9 @@ pip install -r requirements.txt
 
 # Run tests
 python -m pytest -q --basetemp .pytest_tmp -p no:cacheprovider
+
+# Run D4 paper trader
+python -m scripts.paper_trading.d4_paper_trader --run-once
 ```
 
 ---
