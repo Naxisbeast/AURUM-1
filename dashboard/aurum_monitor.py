@@ -284,29 +284,15 @@ def render_health_bar(data: dict[str, Any]) -> None:
 
     st.markdown(
         f"""
-        <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;
-                    padding:20px 24px;border:1px solid #334155;border-radius:12px;
-                    background:var(--secondary-background-color, #1e293b);margin-bottom:20px;">
-          <strong style="color:{cfg['color']};font-size:1.2rem;">● {cfg['label']}</strong>
-          <div style="display:flex;flex-direction:column;gap:2px;">
-            <span style="font-size:0.75rem;color:#64748b;">Last updated</span>
-            <strong>{freshness}</strong>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:2px;">
-            <span style="font-size:0.75rem;color:#64748b;">Equity</span>
-            <strong>{eq_str}</strong>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:2px;">
-            <span style="font-size:0.75rem;color:#64748b;">Today</span>
-            <strong style="color:{pnl_color};">{pnl_str}</strong>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:2px;">
-            <span style="font-size:0.75rem;color:#64748b;">Open positions</span>
-            <strong>{data['open_positions']}</strong>
-          </div>
-          <div style="font-size:0.85rem;color:#94a3b8;align-self:flex-end;">
-            {last_trade}{kill_info}
-          </div>
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;
+                    padding:14px 18px;border:1px solid #334155;border-radius:10px;
+                    background:var(--secondary-background-color, #1e293b);margin-bottom:16px;">
+          <strong style="color:{cfg['color']};font-size:1.15rem;">● {cfg['label']}</strong>
+          <span>Updated: <strong>{freshness}</strong></span>
+          <span>Equity: <strong>{eq_str}</strong></span>
+          <span>Today: <strong style="color:{pnl_color};">{pnl_str}</strong></span>
+          <span>Open: <strong>{data['open_positions']}</strong></span>
+          <span style="font-size:0.9rem;color:#94a3b8;">{last_trade}{kill_info}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -405,123 +391,6 @@ def render_equity_chart(data: dict[str, Any]) -> None:
     fig.update_yaxes(title_text="DD %", showgrid=True, gridcolor="#334155", row=2, col=1)
 
     st.plotly_chart(fig, use_container_width=True)
-
-def render_price_chart(data: dict[str, Any]) -> None:
-    """Price chart with entry/exit trade markers overlaid on price line.
-
-    Each trade shows: entry price at entry_time, exit price at exit_time,
-    colored by direction (green BUY, red SELL). Win/loss is distinguished
-    by marker shape (triangle-up win, triangle-down loss).
-    """
-    trades = data.get("trades", [])
-    if not trades:
-        st.caption("Price chart: no trades to plot")
-        return
-
-    fig = go.Figure()
-
-    # Collect all price points from trades
-    entry_times = []
-    entry_prices = []
-    exit_times = []
-    exit_prices = []
-    entry_colors = []
-    exit_colors = []
-    entry_symbols = []
-    exit_symbols = []
-    entry_labels = []
-    exit_labels = []
-
-    for t in trades:
-        entry_time = t.get("entry_time") or t.get("timestamp")
-        exit_time = t.get("exit_time")
-        entry_price = t.get("entry_price")
-        exit_price = t.get("exit_price")
-        direction = t.get("direction", "BUY")
-        pnl = t.get("net_pnl", 0) or 0
-        is_win = pnl > 0
-
-        if entry_time and entry_price:
-            try:
-                entry_times.append(pd.Timestamp(entry_time))
-                entry_prices.append(entry_price)
-                entry_colors.append("#22c55e" if direction == "BUY" else "#ef4444")
-                entry_symbols.append("triangle-up" if is_win else "triangle-down")
-                r_multiple = t.get("r_multiple", None)
-                r_str = f"R={r_multiple:+.3f}" if r_multiple else ""
-                entry_labels.append(
-                    f"{direction} @ ${entry_price:.2f}<br>"
-                    f"Entry: {str(entry_time)[:16]}<br>{r_str}"
-                )
-            except Exception:
-                pass
-
-        if exit_time and exit_price:
-            try:
-                exit_times.append(pd.Timestamp(exit_time))
-                exit_prices.append(exit_price)
-                exit_colors.append("#22c55e" if is_win else "#ef4444")
-                exit_symbols.append("x" if is_win else "x-thin")
-                exit_labels.append(
-                    f"Exit @ ${exit_price:.2f}<br>"
-                    f"PnL: ${pnl:+,.2f}<br>"
-                    f"{'WIN' if is_win else 'LOSS'}"
-                )
-            except Exception:
-                pass
-
-    if not entry_times:
-        st.caption("Price chart: no valid trade timestamps")
-        return
-
-    # Entry markers
-    fig.add_trace(go.Scatter(
-        x=entry_times, y=entry_prices,
-        mode="markers",
-        marker={"size": 10, "color": entry_colors, "symbol": entry_symbols,
-                "line": {"width": 1, "color": "white"}},
-        name="Entry",
-        text=entry_labels,
-        hovertemplate="%{text}<extra></extra>",
-    ))
-
-    # Exit markers
-    if exit_times:
-        fig.add_trace(go.Scatter(
-            x=exit_times, y=exit_prices,
-            mode="markers",
-            marker={"size": 8, "color": exit_colors, "symbol": exit_symbols,
-                    "line": {"width": 1, "color": "white"}},
-            name="Exit",
-            text=exit_labels,
-            hovertemplate="%{text}<extra></extra>",
-        ))
-
-        # Connect entry to exit with lines
-        for i in range(min(len(entry_times), len(exit_times))):
-            if entry_times[i] and exit_times[i] and entry_prices[i] and exit_prices[i]:
-                fig.add_trace(go.Scatter(
-                    x=[entry_times[i], exit_times[i]],
-                    y=[entry_prices[i], exit_prices[i]],
-                    mode="lines",
-                    line={"color": "#22c55e" if entry_colors[i] == "#22c55e" else "#ef4444",
-                          "width": 1, "dash": "dot"},
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-
-    fig.update_layout(
-        height=400, margin={"l": 0, "r": 0, "t": 10, "b": 0},
-        hovermode="x unified",
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e2e8f0"},
-        legend={"orientation": "h", "y": 1.1},
-    )
-    fig.update_xaxes(showgrid=False, title_text="")
-    fig.update_yaxes(showgrid=True, gridcolor="#334155", title_text="Price ($)")
-
-    st.plotly_chart(fig, use_container_width=True)
-
 
 def render_open_position(data: dict[str, Any]) -> None:
     """Show open position detail, or explicit empty state."""
@@ -682,7 +551,7 @@ def main():
         st.subheader("D4 (20-bar Donchian)")
         render_kpi_cards(data)
     with col_right:
-        st.metric("Status", data["status"])
+        st.metric("Status", data["status"]),
         if data["trade_count"] > 0:
             pnl_total = data.get("total_pnl", 0) or 0
             st.metric("Total PnL", f"${pnl_total:+,.2f}")
@@ -697,10 +566,6 @@ def main():
     # Performance
     st.subheader("Performance")
     render_equity_chart(data)
-
-    # Price chart with trade markers
-    st.subheader("Price & Trade History")
-    render_price_chart(data)
 
     # Trade log
     st.subheader("Trade Log")
