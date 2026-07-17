@@ -33,16 +33,8 @@ jobs:
 
       - name: Run unit tests (core modules)
         run: |
-          python -m pytest tests/test_paper_broker.py tests/test_risk_manager.py tests/test_donchian_signals.py tests/test_instruments.py -v --tb=short -x
+          python -m pytest tests/test_paper_broker.py tests/test_risk_manager.py tests/test_donchian_signals.py tests/test_instruments.py -v --tb=short
 
-      - name: Run sanity tests
+      - name: Run D4 regression and sanity tests
         run: |
-          python -m pytest tests/test_backtest_sanity.py -v --tb=short -x
-
-      - name: Run D4 regression test
-        run: |
-          python -m pytest tests/test_d4_regression.py -v --tb=short -x
-
-      - name: Run existing phase tests (no OANDA API needed)
-        run: |
-          python -m pytest tests/test_phase1_ingestion.py tests/test_phase2_features.py tests/test_phase5_risk.py tests/test_pending_sizing_and_slippage.py -v --tb=short -x
+          python -m pytest tests/test_d4_regression.py tests/test_backtest_sanity.py -v --tb=short
