@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libomp-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests (core modules)
+        run: |
+          python -m pytest tests/test_paper_broker.py tests/test_risk_manager.py tests/test_donchian_signals.py tests/test_instruments.py -v --tb=short -x
+
+      - name: Run sanity tests
+        run: |
+          python -m pytest tests/test_backtest_sanity.py -v --tb=short -x
+
+      - name: Run D4 regression test
+        run: |
+          python -m pytest tests/test_d4_regression.py -v --tb=short -x
+
+      - name: Run existing phase tests (no OANDA API needed)
+        run: |
+          python -m pytest tests/test_phase1_ingestion.py tests/test_phase2_features.py tests/test_phase5_risk.py tests/test_pending_sizing_and_slippage.py -v --tb=short -x

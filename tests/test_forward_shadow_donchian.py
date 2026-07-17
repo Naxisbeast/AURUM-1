@@ -19,7 +19,7 @@ from scripts.forward_shadow_donchian import (
     write_shadow_state,
 )
 from scripts.donchian_research_runner import donchian_signals, run_donchian_backtest
-from scripts.research_edge_prototypes import build_research_features
+from scripts.research.research_edge_prototypes import build_research_features
 
 
 def settings_for(tmp_path: Path) -> dict:

@@ -31,7 +31,7 @@ from aurum1.execution.broker import PositionRecord
 from aurum1.instruments import InstrumentSpec
 from aurum1.risk import RiskManager
 from aurum1.signals import CandleRow, TradeInstruction
-from scripts.research_edge_prototypes import build_research_features
+from scripts.research.research_edge_prototypes import build_research_features
 
 STRATEGY = "d4_paper_trader"
 LOOKBACK = 20

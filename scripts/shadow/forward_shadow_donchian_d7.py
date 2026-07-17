@@ -28,7 +28,7 @@ from aurum1.instruments import InstrumentSpec
 try:
     from scripts.research.research_edge_prototypes import build_research_features
 except ImportError:
-    from scripts.research_edge_prototypes import build_research_features
+    from scripts.research.research_edge_prototypes import build_research_features
 
 STRATEGY = "donchian_d7_10bar_buy_sell_2r"
 LOOKBACK = 10; RISK_PCT = 0.0025
