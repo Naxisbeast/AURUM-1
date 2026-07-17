@@ -8,7 +8,7 @@ Both use identical entry/exit logic. The ONLY difference:
 Usage:
     python experiments/run_ai_backtest.py
     python experiments/run_ai_backtest.py --quick   (5000 bars)
-    python experiments/run_ai_backtest.py --api     (Claude API)
+    python experiments/run_ai_backtest.py --api     (LLM API)
 """
 import sys, os, math, argparse
 sys.stdout.reconfigure(encoding='utf-8')

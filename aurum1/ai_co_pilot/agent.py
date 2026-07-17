@@ -1,6 +1,6 @@
-"""Claude Agent: the AI decision-making layer for AURUM-1.
+"""AI Agent: the decision-making layer for AURUM-1.
 
-This module integrates with Claude (via API) to make context-aware trading
+This module integrates with an LLM (via API) to make context-aware trading
 decisions. It constructs a system prompt defining the strategy rules, sends
 the current market context, and parses the AI's structured response.
 
@@ -17,7 +17,7 @@ import pandas as pd
 from aurum1.ai_co_pilot.context import MarketContext
 from aurum1.ai_co_pilot.safety import SafetyLayer, SafetyViolation
 
-SYSTEM_PROMPT = """You are AURUM-1's strategy manager — the AI trading co-pilot for a gold (XAU/USD) M15 trend-following system.
+SYSTEM_PROMPT = """You are AURUM-1's strategy manager — the trading co-pilot for a gold (XAU/USD) M15 trend-following system.
 
 ## Strategy Rules
 - Core signal: 10-bar Donchian channel breakout (BUY above channel high, SELL below channel low)
@@ -63,10 +63,10 @@ Always respond with ONLY a JSON object. No explanations, no markdown, no convers
 
 
 class AiAgent:
-    """Interface to Claude for trading decisions.
+    """Interface to the AI decision-making layer.
 
     Can operate in two modes:
-    - API mode: calls Claude API (requires ANTHROPIC_API_KEY set)
+    - API mode: calls the LLM API (requires ANTHROPIC_API_KEY set)
     - Fallback mode: returns rule-based default decisions
     """
 
@@ -83,17 +83,17 @@ class AiAgent:
     def decide_on_signal(self, context: MarketContext) -> dict:
         """Decide whether to take a new signal and with what parameters."""
         if self._api_available:
-            return self._ask_claude(context, "new_signal")
+            return self._ask_ai(context, "new_signal")
         return self._fallback_new_signal(context)
 
     def decide_on_position(self, context: MarketContext) -> dict:
         """Decide how to manage an existing open position."""
         if self._api_available:
-            return self._ask_claude(context, "position_management")
+            return self._ask_ai(context, "position_management")
         return self._fallback_position_management(context)
 
-    def _ask_claude(self, context: MarketContext, decision_type: str) -> dict:
-        """Call Claude API for a trading decision."""
+    def _ask_ai(self, context: MarketContext, decision_type: str) -> dict:
+        """Call the LLM API for a trading decision."""
         from aurum1.ai_co_pilot.context import ContextBuilder
 
         cb = ContextBuilder()
@@ -134,7 +134,7 @@ class AiAgent:
         return self._fallback_position_management(context)
 
     def _parse_json_response(self, text: str) -> dict:
-        """Extract JSON from Claude's response, handling common formatting."""
+        """Extract JSON from the AI's response, handling common formatting."""
         # Try direct parse
         text = text.strip()
         if text.startswith("{"):
