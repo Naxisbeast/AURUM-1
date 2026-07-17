@@ -66,6 +66,16 @@ aurum1_deploy.zip
 **/*.pkl
 **/*.pickle
 
+# Pytest caches at repo root
+.pytest_*/
+.pytestrun_deps/
+.run_deps/
+.deps/
+.testdeps/
+.pytestdeps/
+.pytestwheels/
+.pytest_tmp/
+
 # Editor and OS files
 .vscode/
 .idea/
