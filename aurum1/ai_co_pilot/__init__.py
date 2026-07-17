@@ -5,6 +5,6 @@ context-aware decisions about sizing, exits, and trade management.
 
 Components:
     context.py  — Builds structured market context for the AI
-    agent.py    — Claude integration for decision-making
+    agent.py    — AI integration for decision-making
     safety.py   — Hard limits the AI cannot override
 """
