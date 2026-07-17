@@ -278,52 +278,25 @@ def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: di
         st.write(f"Blackout status: **{'active' if status.get('blackout_active') else 'clear'}**")
         st.write(f"Next high-impact event: **{event}**")
     with right:
-        score = float(signal.get("raw_score", 0.0))
-        fig = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=score,
-                domain={"x": [0, 1], "y": [0, 1]},
-                gauge={
-                    "axis": {"range": [-1.0, 1.0]},
-                    "bar": {"color": "#111827"},
-                    "steps": [
-                        {"range": [-1.0, -0.60], "color": "#fecaca"},
-                        {"range": [-0.60, 0.60], "color": "#fef3c7"},
-                        {"range": [0.60, 1.0], "color": "#bbf7d0"},
-                    ],
-                },
-            )
-        )
-        fig.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
-
-
-def load_trade_log(db_path: str) -> pd.DataFrame:
-    with right:
-        score = float(signal.get("raw_score", 0.0))
-        fig = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=score,
-                domain={"x": [0, 1], "y": [0, 1]},
-                gauge={
-                    "axis": {"range": [-1.0, 1.0]},
-                    "bar": {"color": "#111827"},
-                    "steps": [
-                        {"range": [-1.0, -0.60], "color": "#fecaca"},
-                        {"range": [-0.60, 0.60], "color": "#fef3c7"},
-                        {"range": [0.60, 1.0], "color": "#bbf7d0"},
-                    ],
-                },
-            )
-        )
-        fig.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
+        recent = trades.tail(5) if not trades.empty else pd.DataFrame()
+        if not recent.empty:
+            st.write("**Recent trades**")
+            for _, r in recent.iterrows():
+                pnl = float(r.get("pnl", 0))
+                dir_ = str(r.get("direction", "?"))
+                icon = "🟢" if pnl > 0 else "🔴"
+                r_val = r.get("rr", None)
+                r_str = f" R:{float(r_val):+.2f}" if r_val and float(r_val) != 0 else ""
+                st.write(f"{icon} {dir_} ${pnl:+.2f}{r_str}")
+        total_pnl = float(trades["pnl"].sum()) if not trades.empty else 0.0
+        st.write(f"**Total P&L (all-time):** ${total_pnl:+,.2f}")
 
 
 def render_trade_log(trades: pd.DataFrame) -> None:
     st.subheader("Trade Log")
+
+
+def load_trade_log(db_path: str) -> pd.DataFrame:
     if trades.empty:
         st.info("No trade records yet.")
         return
