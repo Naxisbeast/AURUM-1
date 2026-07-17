@@ -34,12 +34,21 @@ import streamlit as st
 st.set_page_config(page_title="AURUM-1 Operations Monitor", layout="wide")
 
 PAPER_DB = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
+D7_DB = ROOT / "reports" / "forward_shadow" / "donchian_d7.sqlite3"
 
 # ── Helpers ──
 
 def _load_paper_db() -> sqlite3.Connection:
     """Open a read-only connection to the paper trading DB."""
     conn = sqlite3.connect(f"file:{PAPER_DB}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _load_d7_db() -> sqlite3.Connection | None:
+    """Open a read-only connection to the D7 DB if it exists."""
+    if not D7_DB.exists():
+        return None
+    conn = sqlite3.connect(f"file:{D7_DB}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -179,6 +188,43 @@ def load_overview() -> dict[str, Any]:
 
     conn.close()
     return result
+
+@st.cache_data(ttl=30)
+def load_d7_aggregate() -> dict[str, Any] | None:
+    """Load D7 aggregate KPIs from its SQLite DB."""
+    conn = _load_d7_db()
+    if conn is None:
+        return None
+    try:
+        trades = _fetchall(conn, "SELECT * FROM d7_trades")
+        equity_rows = _fetchall(conn, "SELECT * FROM d7_equity_curve ORDER BY rowid DESC LIMIT 1")
+        if not trades:
+            return {"trades": 0, "wins": 0, "losses": 0, "pf": None, "total_pnl": 0.0, "wr": None, "equity": None}
+        trade_count = len(trades)
+        win_count = sum(1 for t in trades if t["net_pnl"] and t["net_pnl"] > 0)
+        loss_count = trade_count - win_count
+        gross_win = sum(t["net_pnl"] for t in trades if t["net_pnl"] and t["net_pnl"] > 0)
+        gross_loss = abs(sum(t["net_pnl"] for t in trades if t["net_pnl"] and t["net_pnl"] < 0))
+        pf = gross_win / gross_loss if gross_loss > 0 else None
+        total_pnl = sum((t["net_pnl"] or 0) for t in trades)
+        equity = equity_rows[0]["equity"] if equity_rows else None
+        # Days live: D7 launched 2026-07-16
+        d7_launch = pd.Timestamp("2026-07-16", tz=UTC)
+        days_live = max(0, (datetime.now(UTC) - d7_launch).days)
+        is_early = days_live < 3  # Early if running less than 3 days
+
+        result = {
+            "trades": trade_count, "wins": win_count, "losses": loss_count,
+            "pf": pf, "total_pnl": total_pnl,
+            "wr": win_count / trade_count if trade_count > 0 else None,
+            "equity": equity,
+            "days_live": days_live, "is_early": is_early,
+        }
+        conn.close()
+        return result
+    except Exception:
+        conn.close()
+        return None
 
 # ── Rendering ──
 
@@ -540,6 +586,81 @@ def render_trade_log(data: dict[str, Any]) -> None:
     styled = df[display].style.apply(_row_style, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
+def render_comparison_card(d4: dict[str, Any], d7: dict[str, Any] | None) -> None:
+    """Side-by-side D4 | D7 comparison card.
+
+    D7 is in early launch phase — shows days live and sample size
+    prominently so the maturity gap is clear, not disguised.
+    """
+    st.subheader("System Comparison")
+    st.caption("D4 has a significant head start. Days live and trade counts are shown alongside performance metrics to make the maturity gap visible.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        d4_days = d4.get("days_live", 0)
+        st.markdown(
+            f"""
+            <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
+              <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D4 (20-bar Donchian)</div>
+              <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:12px;">
+                Live · Day {d4_days} · {d4.get('trade_count', 0)} trades
+              </div>
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:4px 0;color:#94a3b8;">PF</td>
+                    <td style="text-align:right;font-weight:600;">{d4.get('profit_factor', 0):.3f}</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
+                    <td style="text-align:right;font-weight:600;">{d4.get('win_rate', 0)*100:.1f}%</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL (all-time)</td>
+                    <td style="text-align:right;font-weight:600;">${(d4.get('total_pnl', 0) or 0):+,.2f}</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
+                    <td style="text-align:right;font-weight:600;">${d4.get('equity', 0):,.2f}</td></tr>
+              </table>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        if d7 is None:
+            st.markdown(
+                """
+                <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
+                  <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D7 (10-bar Donchian)</div>
+                  <div style="color:#64748b;text-align:center;padding:20px 0;">No data yet</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+
+        d7_days = d7.get("days_live", 0)
+        d7_trades = d7.get("trades", 0)
+        is_early = d7_trades < 30
+        maturity_label = " — early sample" if is_early else ""
+
+        st.markdown(
+            f"""
+            <div style="border:1px solid #334155;border-radius:10px;padding:16px;height:100%;">
+              <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px;">D7 (10-bar Donchian)</div>
+              <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:12px;">
+                Day {d7_days}{maturity_label} · {d7_trades} trades
+                { '<div style=\"color:#64748b;font-size:0.75rem;margin-top:4px;\">Trades computed from historical cache — not live yet</div>' if d7_days < 1 else '' }
+              </div>
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:4px 0;color:#94a3b8;">PF</td>
+                    <td style="text-align:right;font-weight:600;">{d7.get('pf', 0):.3f}</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">WR</td>
+                    <td style="text-align:right;font-weight:600;">{d7.get('wr', 0)*100:.1f}%</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Total PnL (all-time)</td>
+                    <td style="text-align:right;font-weight:600;">${(d7.get('total_pnl', 0) or 0):+,.2f}</td></tr>
+                <tr><td style="padding:4px 0;color:#94a3b8;">Equity</td>
+                    <td style="text-align:right;font-weight:600;">${d7.get('equity', 0):,.2f}</td></tr>
+              </table>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 # ── Main ──
 
@@ -547,6 +668,7 @@ def main():
     st.title("AURUM-1 Operations Monitor")
 
     data = load_overview()
+    d7_data = load_d7_aggregate()
 
     # Health bar (always on top)
     render_health_bar(data)
@@ -554,6 +676,9 @@ def main():
     # D4 KPI cards
     st.subheader("D4 (20-bar Donchian)")
     render_kpi_cards(data)
+
+    # D4 vs D7 side-by-side comparison
+    render_comparison_card(data, d7_data)
 
     # Current state
     st.subheader("Current State")
