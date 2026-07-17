@@ -80,10 +80,9 @@
   "risk": {
     "spread_filter_pips": 3.0,
     "default_spread_pips": 1.5,
-    "risk_per_trade_pct": 0.01,
+    "risk_per_trade_pct": 0.0025,
     "kelly_min_trades": 20,
     "kelly_default_fraction": 0.25,
-    "kelly_cap": 0.25,
     "kelly_max_fraction": 0.25,
     "max_spread_pips": 3.0,
     "daily_loss_kill_pct": 0.03,
@@ -136,7 +135,7 @@
     "min_history_bars": 20000,
     "min_history_days": 250,
     "disable_ml": true,
-    "verify_feature_causality": false,
+    "verify_feature_causality": true,
     "n_monte_carlo": 1000,
     "min_trades_for_stats": 10
   },

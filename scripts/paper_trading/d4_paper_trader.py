@@ -51,9 +51,9 @@ class D4PaperTrader:
         self.settings = settings
         self.market_db = MARKET_DB
         self.spec = InstrumentSpec.from_settings(settings)
-        self.sp = 1.5
-        self.slip_pips = 0.5
-        self.slip_dist = self.slip_pips * self.spec.pip_size
+        # NOTE: Slippage and spread are handled by PaperBroker (in the broker
+        # module) using Gaussian slippage and session-aware spread estimation.
+        # No hardcoded slippage constants needed here.
         self.stop_requested = threading.Event()
 
         # Observable metrics
@@ -474,6 +474,7 @@ class D4PaperTrader:
                 if not self._stale_warning_logged:
                     print(f"  WARNING: Stale market data — latest candle is {age_minutes:.0f} minutes old ({new_latest})")
                     self._stale_warning_logged = True
+                    self._send_alert("stale_data", f"Market data {age_minutes:.0f} min stale, latest: {new_latest}")
             else:
                 self._stale_warning_logged = False
             self._last_data_ts = now
@@ -623,11 +624,11 @@ class D4PaperTrader:
 
         if close > high_20 and math.isfinite(high_20):
             direction = "BUY"
-            entry_price = float(row["open"]) + self.slip_dist
+            entry_price = float(row["open"])  # PaperBroker handles slippage
             stop_loss = entry_price - 2.0 * atr
         elif close < low_20 and math.isfinite(low_20):
             direction = "SELL"
-            entry_price = float(row["open"]) - self.slip_dist
+            entry_price = float(row["open"])  # PaperBroker handles slippage
             stop_loss = entry_price + 2.0 * atr
 
         if direction is None or stop_loss is None:
@@ -635,7 +636,8 @@ class D4PaperTrader:
         if (direction == "BUY" and stop_loss >= entry_price) or (direction == "SELL" and stop_loss <= entry_price):
             return
 
-        # Risk distance from raw signal prices (before slippage), matching walk-forward
+        # Risk distance from entry price (PaperBroker adds Gaussian slippage on fill)
+        # 2R exit: TP at +2x risk distance, SL at -1x risk distance
         raw_entry = float(row["open"])
         raw_stop = raw_entry - 2.0 * atr if direction == "BUY" else raw_entry + 2.0 * atr
         risk_dist = abs(raw_entry - raw_stop)
@@ -750,6 +752,17 @@ class D4PaperTrader:
         self._save_snapshot()
         self._write_health_file()
         self._print_summary()
+
+    def _send_alert(self, title: str, message: str) -> None:
+        """Send a critical alert via webhook if ALERT_WEBHOOK_URL is configured."""
+        webhook_url = os.getenv("ALERT_WEBHOOK_URL")
+        if not webhook_url:
+            return
+        try:
+            import requests
+            requests.post(webhook_url, json={"text": f"[{STRATEGY}] {title}: {message}"}, timeout=5)
+        except Exception:
+            pass  # alerting failure is non-critical
 
     def _print_status(self):
         """Print current status line with spread and metrics."""
