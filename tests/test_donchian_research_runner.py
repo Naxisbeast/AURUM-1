@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from scripts.donchian_research_runner import donchian_signals, htf_bull_slope_filter, verdict
+from scripts.research.donchian_research_runner import donchian_signals, htf_bull_slope_filter, verdict
 
 
 def _frame(rows: int = 30) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -80,7 +80,7 @@
   "risk": {
     "spread_filter_pips": 3.0,
     "default_spread_pips": 1.5,
-    "risk_per_trade_pct": 0.0025,
+    "risk_per_trade_pct": 0.0035,
     "kelly_min_trades": 20,
     "kelly_default_fraction": 0.25,
     "kelly_max_fraction": 0.25,
@@ -169,7 +169,7 @@
     "status": "research_only",
     "paper_trade": true,
     "allow_oanda_orders": false,
-    "risk_per_trade_pct": 0.0025,
+    "risk_per_trade_pct": 0.0035,
     "duration_months_min": 3,
     "lookback": 20,
     "exit_mode": "FIXED",

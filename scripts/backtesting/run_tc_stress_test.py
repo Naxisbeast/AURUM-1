@@ -10,8 +10,9 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 
-LOCAL = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(LOCAL))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
 from scripts.research.research_edge_prototypes import build_research_features
@@ -35,10 +36,10 @@ TRAIN_BARS = 33264
 TEST_BARS = 11088
 STEP_BARS = 11088
 
-settings = load_settings(LOCAL / 'aurum1' / 'config' / 'settings.yaml')
+settings = load_settings(ROOT / 'aurum1' / 'config' / 'settings.yaml')
 spec = InstrumentSpec.from_settings(settings)
 
-ohlcv = load_ohlcv('M15', LOCAL / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
+ohlcv = load_ohlcv('M15', ROOT / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
 features = build_research_features(ohlcv)
 
 results = []
@@ -160,7 +161,7 @@ for r in results:
     print(f'{r["scenario"]:<40s} {r["mean_sharpe"]:>8.4f} {r["mean_pf"]:>8.4f} {r["mean_wr"]:>8.2%} {r["mean_maxdd"]:>8.2%} {r["total_trades"]:>8d} {r["pos_window_rate"]:>7.0%} {vs_base:>8s}')
 print(f'{"="*100}')
 
-out = LOCAL / 'reports' / 'forward_shadow' / 'd4_tc_stress_test_results.json'
+out = ROOT / 'reports' / 'forward_shadow' / 'd4_tc_stress_test_results.json'
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps({'scenarios': results, 'generated_at': datetime.now(UTC).isoformat()}, indent=2))
 print(f'\nSaved: {out}')

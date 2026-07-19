@@ -11,7 +11,7 @@ WorkingDirectory=/opt/aurum1
 Environment=OANDA_ENV=practice
 Environment=ALLOW_OANDA_ORDERS=false
 Environment=ALLOW_LIVE_TRADING=false
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian_d2.py
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/shadow/forward_shadow_donchian_d2.py
 Restart=on-failure
 RestartSec=30
 

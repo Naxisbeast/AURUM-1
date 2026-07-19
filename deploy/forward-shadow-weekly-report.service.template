@@ -10,7 +10,7 @@ EnvironmentFile=/opt/aurum1/.env
 Environment=ALLOW_OANDA_ORDERS=false
 Environment=ALLOW_LIVE_TRADING=false
 Environment=OANDA_ENV=practice
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian.py weekly-report
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/shadow/forward_shadow_donchian.py weekly-report
 User=aurum1
 Group=aurum1
 NoNewPrivileges=true

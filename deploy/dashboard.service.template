@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/aurum1
 EnvironmentFile=/opt/aurum1/.env
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/run_dashboard.py
+ExecStart=/opt/aurum1/.venv/bin/python -m streamlit run /opt/aurum1/monitor/dashboard.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
 Restart=on-failure
 RestartSec=10
 User=aurum1

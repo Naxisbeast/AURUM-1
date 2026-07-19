@@ -35,7 +35,7 @@ from scripts.research.research_edge_prototypes import build_research_features
 
 STRATEGY = "d4_paper_trader"
 LOOKBACK = 20
-RISK_PCT = 0.0025
+RISK_PCT = 0.0025  # display-only; real risk from settings.yaml
 MARKET_DB = ROOT / "aurum1" / "data" / "forward_shadow_market_cache.sqlite3"
 PID_FILE = ROOT / "run" / "d4_paper_trader.pid"
 HEALTH_FILE = ROOT / "run" / "d4_paper_trader_health.json"
@@ -445,7 +445,7 @@ class D4PaperTrader:
             HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
             HEALTH_FILE.write_text(json.dumps(health, indent=2, default=str))
         except Exception as exc:
-            pass  # health file is non-critical
+            print(f"  Health file error (non-critical): {exc}")
 
     def _refresh_data(self):
         """Read latest M15 candles from the forward shadow market cache."""
@@ -762,7 +762,7 @@ class D4PaperTrader:
             import requests
             requests.post(webhook_url, json={"text": f"[{STRATEGY}] {title}: {message}"}, timeout=5)
         except Exception:
-            pass  # alerting failure is non-critical
+            print(f"  Alert webhook failed (non-critical)")
 
     def _print_status(self):
         """Print current status line with spread and metrics."""
@@ -864,7 +864,7 @@ def _release_pid_lock():
         if PID_FILE.exists() and PID_FILE.read_text().strip() == str(os.getpid()):
             PID_FILE.unlink()
     except Exception:
-        pass
+        pass  # PID file removal is best-effort
 
 
 def main():

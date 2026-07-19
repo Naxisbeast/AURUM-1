@@ -13,7 +13,7 @@ Environment=ALLOW_LIVE_TRADING=false
 Environment=OANDA_ENV=practice
 # DEPLOYMENT REQUIRED:
 # Replace START_DATE with the UTC start timestamp chosen at deployment time.
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian.py service --start-date START_DATE
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/shadow/forward_shadow_donchian.py service --start-date START_DATE
 Restart=on-failure
 RestartSec=30
 User=aurum1
