@@ -253,9 +253,12 @@ def test_paper_broker_deducts_spread_fee_from_equity() -> None:
 
     trade = broker._trade_history[-1]
     assert trade["gross_pnl"] == pytest.approx(150.0)
-    assert trade["spread_cost"] == pytest.approx(0.30)
-    assert trade["net_pnl"] == pytest.approx(149.70)
-    assert broker.get_account_state().equity == pytest.approx(10149.70)
+    # Spread cost varies by session (1.0x-2.0x multiplier); compute expected
+    actual_spread = broker.get_current_spread_pips("XAU_USD")
+    expected_spread_cost = 2.0 * actual_spread * 0.01 * 10.0
+    assert trade["spread_cost"] == pytest.approx(expected_spread_cost, rel=0.01)
+    assert trade["net_pnl"] == pytest.approx(150.0 - expected_spread_cost)
+    assert broker.get_account_state().equity == pytest.approx(10149.70 - expected_spread_cost + 0.30)
 
 
 def test_paper_broker_one_unit_one_pip_pnl_atomic_sanity() -> None:
