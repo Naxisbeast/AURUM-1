@@ -434,3 +434,80 @@ def compute_r_distribution(trades: pd.DataFrame) -> dict[str, Any]:
         "cumulative_r": round(float(r_values.sum()), 4),
         "r_by_session": r_by_session,
     }
+
+
+# ---------------------------------------------------------------------------
+# System health metrics
+# ---------------------------------------------------------------------------
+
+def load_system_health(db_path: str) -> dict[str, Any]:
+    """Load system health indicators from the health file and paper DB.
+
+    Reads the D4 paper trader health JSON and falls back to paper_trading DB.
+    Returns a dict suitable for dashboard display.
+    """
+    from pathlib import Path
+
+    root = Path(db_path).parent.parent
+    health_file = root / "run" / "d4_paper_trader_health.json"
+    health: dict[str, Any] = {
+        "source": "none",
+        "avg_entry_slippage": None,
+        "avg_exit_slippage": None,
+        "avg_spread_pips": None,
+        "avg_latency_seconds": None,
+        "min_latency_seconds": None,
+        "max_latency_seconds": None,
+        "missed_signals": 0,
+        "missed_signal_reasons": [],
+        "latest_candle_age_minutes": None,
+        "trade_count": 0,
+        "uptime_hours": 0.0,
+        "total_signals": 0,
+        "health_timestamp": None,
+    }
+
+    if health_file.exists():
+        try:
+            data = json.loads(health_file.read_text())
+            health["source"] = "d4_health_file"
+            health["avg_entry_slippage"] = data.get("avg_entry_slippage_units")
+            health["avg_exit_slippage"] = data.get("avg_exit_slippage_units")
+            health["avg_spread_pips"] = data.get("avg_spread_pips")
+            health["avg_latency_seconds"] = data.get("avg_latency_seconds")
+            health["min_latency_seconds"] = data.get("min_latency_seconds")
+            health["max_latency_seconds"] = data.get("max_latency_seconds")
+            health["missed_signals"] = data.get("missed_signals", 0)
+            health["missed_signal_reasons"] = data.get("missed_signal_reasons", [])
+            health["latest_candle_age_minutes"] = data.get("market_latest_candle_age_minutes")
+            health["trade_count"] = data.get("trade_count", 0)
+            health["uptime_hours"] = round(data.get("uptime_seconds", 0) / 3600.0, 1)
+            health["total_signals"] = data.get("signals_seen", 0)
+            health["health_timestamp"] = data.get("timestamp")
+            return health
+        except (json.JSONDecodeError, KeyError, OSError):
+            pass
+
+    # Fallback: read from paper_trading DB
+    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    if paper_db.exists():
+        try:
+            with closing(sqlite3.connect(paper_db)) as conn:
+                trade_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+                missed = conn.execute("SELECT COUNT(*) FROM missed_signals").fetchone()[0]
+                health["source"] = "paper_db"
+                health["trade_count"] = trade_count
+                health["missed_signals"] = missed
+        except sqlite3.Error:
+            pass
+
+    return health
+
+
+__all__ = [
+    "compute_drawdown_curve", "compute_mae_mfe", "compute_r_distribution",
+    "compute_rolling_profit_factor", "compute_rolling_sharpe",
+    "compute_rolling_win_rate", "get_system_status", "load_equity_curve",
+    "latest_signal_snapshot", "next_event", "load_trade_log", "load_event_log",
+    "load_system_health",
+]

@@ -29,6 +29,7 @@ from monitor.metrics import (
     compute_rolling_win_rate,
     get_system_status,
     load_equity_curve,
+    load_system_health,
 )
 
 
@@ -52,6 +53,7 @@ def main() -> None:
     render_rolling_metrics(equity_curve, trades, window_days)
     render_open_positions(db_path)
     render_signal_monitor(trades, events, status)
+    render_system_health(db_path)
     render_trade_log(trades)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
 
@@ -326,6 +328,55 @@ def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: di
     st.write(f"Last PnL: **${float(signal.get('pnl', 0.0)):+,.2f}**")
     st.write(f"Blackout status: **{'active' if status.get('blackout_active') else 'clear'}**")
     st.write(f"Next high-impact event: **{event}**")
+
+
+def render_system_health(db_path: str) -> None:
+    """Render system health panel: latency, slippage, spread, missed signals."""
+    health = load_system_health(db_path)
+
+    st.subheader("System Health")
+
+    if health.get("source") == "none":
+        st.info("No health data available. D4 paper trader health file not found.")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Uptime", f'{health.get("uptime_hours", 0):.1f}h')
+    col2.metric("Total Signals", str(health.get("total_signals", 0)))
+    col3.metric("Missed Signals", str(health.get("missed_signals", 0)))
+    col4.metric("Trades", str(health.get("trade_count", 0)))
+
+    has_health_file = health.get("source") == "d4_health_file"
+    if has_health_file:
+        col1, col2, col3, col4 = st.columns(4)
+
+        lat = health.get("avg_latency_seconds")
+        lat_str = f"{lat:.3f}s" if lat is not None else "—"
+        col1.metric("Avg Latency", lat_str)
+
+        sp = health.get("avg_spread_pips")
+        sp_str = f"{sp:.1f}p" if sp is not None else "—"
+        col2.metric("Avg Spread", sp_str)
+
+        entry_slip = health.get("avg_entry_slippage")
+        slip_str = f"{entry_slip:+.4f}" if entry_slip is not None else "—"
+        col3.metric("Entry Slippage", slip_str)
+
+        exit_slip = health.get("avg_exit_slippage")
+        exit_str = f"{exit_slip:+.4f}" if exit_slip is not None else "—"
+        col4.metric("Exit Slippage", exit_str)
+
+        # Candle age warning
+        candle_age = health.get("latest_candle_age_minutes")
+        if candle_age is not None and candle_age > 120:
+            st.warning(f"Stale data: latest candle is {candle_age:.0f} minutes old")
+
+        # Missed signal reasons
+        reasons = health.get("missed_signal_reasons", [])
+        if reasons:
+            with st.expander("Missed Signal Reasons"):
+                for r in reasons:
+                    st.write(f"- {r.get('reason', '?')}: {r.get('count', 0)}x")
 
 
 def render_trade_log(trades: pd.DataFrame) -> None:
