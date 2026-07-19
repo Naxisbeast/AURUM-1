@@ -15,8 +15,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
@@ -122,9 +123,9 @@ print(f"{'='*70}")
 headers = ["Risk/Trade", "Median DD", "95th DD", "99th DD", "Worst DD",
            "P(DD>10%)", "P(DD>20%)", "P(DD>30%)", "Median Streak",
            "95th Streak", "Worst Streak", "Median Return", "P(Ruin)"]
-print(f"{'─'*110}")
+print(f"{'='*110}")
 print(f"  {'':>10s}  {'MedDD':>7s}  {'95thDD':>7s}  {'99thDD':>7s}  {'WrstDD':>7s}  {'>10%':>6s}  {'>20%':>6s}  {'>30%':>6s}  {'MedStr':>7s}  {'95thStr':>7s}  {'WrstStr':>7s}  {'MedRet':>8s}  {'Ruin':>6s}")
-print(f"{'─'*110}")
+print(f"{'='*110}")
 
 results = []
 base_r_values = trade_r_values.copy()

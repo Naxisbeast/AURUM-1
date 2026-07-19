@@ -14,7 +14,7 @@ Environment=OANDA_ENV=practice
 # Replace <FORWARD_SHADOW_START_DATE_UTC> with the frozen UTC start timestamp
 # chosen at deployment time, for example an ISO-8601 value ending in Z.
 # Do not leave this placeholder in the installed service.
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/forward_shadow_donchian.py service --start-date <FORWARD_SHADOW_START_DATE_UTC>
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/shadow/forward_shadow_donchian.py service --start-date <FORWARD_SHADOW_START_DATE_UTC>
 Restart=on-failure
 RestartSec=30
 User=aurum1

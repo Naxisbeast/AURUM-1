@@ -2,7 +2,9 @@
 import sys, math, json
 from collections import Counter
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 import pandas as pd
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
@@ -11,8 +13,8 @@ from scripts.research.research_edge_prototypes import build_research_features
 LOOKBACK = 20; RISK_PCT = 0.0025
 
 def main():
-    settings = load_settings(Path('/opt/aurum1/aurum1/config/settings.yaml'))
-    ohlcv = load_ohlcv("M15", Path('/opt/aurum1/aurum1/data/backtest_market_cache.sqlite3'))
+    settings = load_settings(ROOT / 'aurum1' / 'config' / 'settings.yaml')
+    ohlcv = load_ohlcv("M15", ROOT / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
     features = build_research_features(ohlcv)
     spec = InstrumentSpec.from_settings(settings)
     sp = 1.5; slip_pips = 0.5; sd = slip_pips * spec.pip_size

@@ -29,8 +29,8 @@ if str(ROOT) not in sys.path:
 
 from aurum1.backtesting.engine import BacktestResult
 from aurum1.data.ingestion import load_ohlcv, load_settings
-from scripts.donchian_diagnostics import adx_wilder, group_trade_stats, month_key
-from scripts.donchian_research_runner import (
+from scripts.research.donchian_diagnostics import adx_wilder, group_trade_stats, month_key
+from scripts.research.donchian_research_runner import (
     DonchianSignal,
     donchian_signals,
     result_summary,

@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from scripts.forward_shadow_donchian import (
+from scripts.shadow.forward_shadow_donchian import (
     RISK_PER_TRADE_PCT,
     assert_shadow_safety,
     build_weekly_report,
@@ -18,7 +18,7 @@ from scripts.forward_shadow_donchian import (
     weekly_report,
     write_shadow_state,
 )
-from scripts.donchian_research_runner import donchian_signals, run_donchian_backtest
+from scripts.research.donchian_research_runner import donchian_signals, run_donchian_backtest
 from scripts.research.research_edge_prototypes import build_research_features
 
 

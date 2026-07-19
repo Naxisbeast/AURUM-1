@@ -235,3 +235,66 @@ class TestD4Regression:
                 assert len(trades1) == len(trades2), (
                     f"Trade count not reproducible: {len(trades1)} vs {len(trades2)}"
                 )
+
+    def test_risk_manager_rejects_spread_too_wide(self):
+        """RiskManager should reject when spread exceeds max."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            settings = _settings(tmp)
+            settings["risk"]["max_spread_pips"] = 0.1
+            from aurum1.risk import AccountState
+            risk_mgr = RiskManager(settings)
+            instruction = TradeInstruction(
+                timestamp=pd.Timestamp("2024-01-01", tz="UTC"),
+                direction="BUY",
+                entry_price=2000.0,
+                stop_loss=1990.0,
+                take_profit=2020.0,
+                atr_at_entry=5.0,
+                signal_score=1.0,
+                regime="TRENDING_UP",
+                confidence=0.75,
+                machine_mode="test",
+            )
+            result = risk_mgr.evaluate(
+                instruction,
+                AccountState(
+                    equity=10000.0, balance=10000.0, open_trade_count=0,
+                    daily_pnl=0.0, peak_equity_30d=10000.0,
+                    current_spread_pips=2.0, open_risk_pct=0.0,
+                ),
+                [],
+            )
+            assert not result.approved, "Should reject when spread > max"
+
+    def test_risk_manager_halts_on_daily_loss_kill(self):
+        """RiskManager should reject when daily loss exceeds kill threshold."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            settings = _settings(tmp)
+            from aurum1.risk import AccountState
+            risk_mgr = RiskManager(settings)
+            instruction = TradeInstruction(
+                timestamp=pd.Timestamp("2024-01-01", tz="UTC"),
+                direction="BUY",
+                entry_price=2000.0,
+                stop_loss=1990.0,
+                take_profit=2020.0,
+                atr_at_entry=5.0,
+                signal_score=1.0,
+                regime="TRENDING_UP",
+                confidence=0.75,
+                machine_mode="test",
+            )
+            # daily loss exceeds 3% kill on 10k equity = -$300
+            result = risk_mgr.evaluate(
+                instruction,
+                AccountState(
+                    equity=10000.0, balance=10000.0, open_trade_count=0,
+                    daily_pnl=-500.0, peak_equity_30d=10000.0,
+                    current_spread_pips=0.5, open_risk_pct=0.0,
+                ),
+                [],
+            )
+            assert not result.approved
+            assert result.rejection_reason == "daily_loss_kill"

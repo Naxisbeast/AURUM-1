@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 
-LOCAL = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(LOCAL))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
 from scripts.research.research_edge_prototypes import build_research_features
@@ -19,11 +20,11 @@ R_MULT = 2.0
 sp = 1.5
 slip_pips = 0.5
 
-settings = load_settings(LOCAL / 'aurum1' / 'config' / 'settings.yaml')
+settings = load_settings(ROOT / 'aurum1' / 'config' / 'settings.yaml')
 spec = InstrumentSpec.from_settings(settings)
 slip_dist = slip_pips * float(spec.pip_size)
 
-ohlcv = load_ohlcv('M15', LOCAL / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
+ohlcv = load_ohlcv('M15', ROOT / 'aurum1' / 'data' / 'backtest_market_cache.sqlite3')
 print(f'Data: {len(ohlcv)} M15 candles ({ohlcv.index[0].date()} to {ohlcv.index[-1].date()})')
 
 features = build_research_features(ohlcv)
@@ -136,7 +137,7 @@ for w in windows:
     m = '+' if w['sharpe'] > 0 else ' '
     print(f'  [{m}] W{w["window"]:02d}: S={w["sharpe"]:.4f} PF={w["pf"]:.4f} T={w["trades"]} R={w["return"]:.3f} DD={w["max_dd"]:.3f}')
 
-out = LOCAL / 'reports' / 'forward_shadow' / f'd4_walk_forward_L{LOOKBACK}_results.json'
+out = ROOT / 'reports' / 'forward_shadow' / f'd4_walk_forward_L{LOOKBACK}_results.json'
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps({'windows': windows, 'summary': {'n': len(windows), 'positive': positive, 'negative': neg, 'mean_sharpe': float(np.mean(all_sharpes)), 'mean_pf': float(np.mean(all_pfs)), 'pos_window_rate': positive/len(windows) if windows else 0}, 'generated_at': datetime.now(UTC).isoformat()}, indent=2, default=str))
 print(f'\nSaved: {out}')
