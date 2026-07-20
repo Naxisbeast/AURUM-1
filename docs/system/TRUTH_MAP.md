@@ -36,57 +36,60 @@
 
 ### Live Services (all running on 178.105.245.66)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Forward Shadow                       │
-│  (aurum1-forward-shadow.service)                        │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  fetch_oanda_history.py  ← →  OANDA API         │   │
-│  │         ↓                                        │   │
-│  │  forward_shadow_market_cache.sqlite3             │   │
-│  │    (M15 OHLCV candles, updated every ~5 min)     │   │
-│  └──────────────────────────────────────────────────┘   │
-└────────────────────┬────────────────────────────────────┘
-                     │ reads
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                     D4 Paper Trader                      │
-│  (aurum1-d4-paper.service, poll=60s)                   │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  1. Read new candles from market cache            │   │
-│  │  2. compute features (research_edge_prototypes)   │   │
-│  │  3. Donchian 20 breakout check                    │   │
-│  │  4. RiskManager.evaluate() → RiskOrder             │   │
-│  │  5. ExecutionEngine → PaperBroker → Position       │   │
-│  │  6. PaperBroker.update_prices() → SL/TP check      │   │
-│  │  7. Persist: trades, snapshots, missed signals     │   │
-│  │  8. Health file: run/d4_paper_trader_health.json  │   │
-│  └──────────────────────────────────────────────────┘   │
-│  DB: paper_trading.sqlite3                               │
-└────────────────────┬────────────────────────────────────┘
-                     │ reads
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│                   Streamlit Dashboard                   │
-│  (aurum1-dashboard.service, port 80 via nginx)          │
-│  reads: aurum1.sqlite3, paper_trading.sqlite3            │
-│  url: https://wear-boot-jennifer-brush.trycloudflare.com │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph FS[Forward Shadow<br/>aurum1-forward-shadow.service]
+        OANDA[OANDA API] <--> FO[fetch_oanda_history.py]
+        FO --> CACHE[forward_shadow_market_cache.sqlite3<br/>M15 OHLCV candles updated every ~5 min]
+    end
+
+    CACHE -->|reads| D4[D4 Paper Trader<br/>aurum1-d4-paper.service<br/>poll=60s]
+
+    subgraph D4[D4 Paper Trader<br/>aurum1-d4-paper.service poll=60s]
+        direction TB
+        S1[1. Read new candles from market cache]
+        S2[2. Compute features<br/>research_edge_prototypes]
+        S3[3. Donchian 20 breakout check]
+        S4[4. RiskManager.evaluate -> RiskOrder]
+        S5[5. ExecutionEngine -> PaperBroker]
+        S6[6. PaperBroker.update_prices<br/>SL/TP check]
+        S7[7. Persist: trades, snapshots,<br/>missed signals]
+        S8[8. Health file<br/>run/d4_paper_trader_health.json]
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+    end
+
+    D4 --> DB[paper_trading.sqlite3]
+
+    DB -->|reads| DASH[Streamlit Dashboard<br/>aurum1-dashboard.service<br/>port 80 via nginx]
+    DASH --> URL[https://wear-boot-jennifer-brush.trycloudflare.com]
+
+    style FS fill:#16213e,color:#fff
+    style OANDA fill:#e94560,color:#fff
+    style CACHE fill:#1a1a2e,color:#fff
+    style D4 fill:#533483,color:#fff
+    style DB fill:#1a1a2e,color:#fff
+    style DASH fill:#0f3460,color:#fff
+    style URL fill:#0f3460,color:#fff
 ```
 
 ### Data Flow (Detailed)
 
-```
-OANDA API (practice) ──► forward_shadow_donchian.py ──► market_cache.sqlite3
-                                                                │
-                                                    d4_paper_trader.py
-                                                         │
-                                                    PaperBroker
-                                                    (in-memory)
-                                                         │
-                                                    paper_trading.sqlite3
-                                                         │
-                                                    Dashboard (reads)
+```mermaid
+graph LR
+    OA[OANDA API<br/>practice] --> FS[forward_shadow_donchian.py]
+    FS --> MC[market_cache.sqlite3]
+    MC --> D4B[d4_paper_trader.py]
+    D4B --> PB[PaperBroker<br/>in-memory]
+    PB --> PT[paper_trading.sqlite3]
+    PT --> DASH2[Dashboard<br/>reads]
+
+    style OA fill:#e94560,color:#fff
+    style FS fill:#0f3460,color:#fff
+    style MC fill:#1a1a2e,color:#fff
+    style D4B fill:#533483,color:#fff
+    style PB fill:#16213e,color:#fff
+    style PT fill:#1a1a2e,color:#fff
+    style DASH2 fill:#0f3460,color:#fff
 ```
 
 ### Key Architectural Properties
@@ -244,65 +247,66 @@ Every Python module classified as one of:
 
 ## 4. Dependency Graph
 
+### Core Library Dependencies
+
+```mermaid
+graph TD
+    SETTINGS[settings.yaml] --> ING[aurum1/data/ingestion.py<br/>load_settings, load_ohlcv,<br/>initialize_database]
+    ING --> INST[instruments.py<br/>InstrumentSpec<br/>pure math]
+    ING --> BROKER[execution/broker.py<br/>PaperBroker, OandaBroker<br/>AccountState, PositionRecord]
+
+    INST --> RISK[risk/manager.py<br/>RiskManager, RiskOrder]
+    BROKER -.-> RISK
+    BROKER --> ENG[execution/engine.py<br/>ExecutionEngine<br/>wraps broker + logs]
+    RISK --> SIG[signals/<br/>TradeInstruction, CandleRow<br/>StateMachine - LEGACY]
+    ENG --> SIG
+
+    style SETTINGS fill:#e94560,color:#fff
+    style ING fill:#533483,color:#fff
+    style INST fill:#0f3460,color:#fff
+    style RISK fill:#16213e,color:#fff
+    style BROKER fill:#16213e,color:#fff
+    style ENG fill:#16213e,color:#fff
+    style SIG fill:#1a1a2e,color:#fff
 ```
-    ┌──────────────────────────────┐
-    │     settings.yaml            │
-    └──────────┬───────────────────┘
-               │ consumed by
-               ▼
-    ┌──────────────────────────────┐
-    │ aurum1/data/ingestion.py     │◄────── used by EVERYTHING
-    │  - load_settings()           │
-    │  - load_ohlcv()              │
-    │  - initialize_database()     │
-    │  - AurumDataIngestor         │
-    └──────────┬───────────────────┘
-               │
-    ┌──────────┴───────────────────┐
-    │                              │
-    ▼                              ▼
-┌──────────────────┐   ┌──────────────────────────┐
-│ instruments.py   │   │ execution/broker.py       │
-│  InstrumentSpec  │   │  PaperBroker              │
-│  (pure math)     │   │  OandaBroker              │
-└────────┬─────────┘   │  AccountState (re-export) │
-         │             │  PositionRecord            │
-         ▼             └────────────┬───────────────┘
-┌──────────────────┐               │
-│ risk/manager.py  │               │
-│  RiskManager     │◄──────────────┘
-│  RiskOrder       │               │
-│  AccountState    │               ▼
-└────────┬─────────┘   ┌──────────────────────────┐
-         │             │ execution/engine.py       │
-         │             │  ExecutionEngine          │
-         │             │  (wraps broker + logs)    │
-         ▼             └────────────┬───────────────┘
-┌──────────────────┐               │
-│ signals/         │               │
-│  TradeInstruction│◄──────────────┘
-│  CandleRow       │
-│  StateMachine    │  (LEGACY)
-└──────────────────┘
 
-Production paths (what actually runs):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-d4_paper_trader.py
-  ├── load_settings (data/ingestion)
-  ├── load_ohlcv (data/ingestion)
-  ├── InstrumentSpec (instruments)
-  ├── ExecutionEngine (execution/engine)
-  │   └── PaperBroker (execution/broker)
-  ├── RiskManager (risk/manager)
-  │   └── InstrumentSpec (instruments)
-  └── build_research_features (research/research_edge_prototypes)
-      └── CandleRow / TradeInstruction (signals)
+### Production Paths (What Actually Runs)
 
-forward_shadow_donchian.py
-  ├── load_ohlcv / load_settings (data/ingestion)
-  ├── InstrumentSpec (instruments)
-  ├── donchian_signals (research/donchian_research_runner)
-  └── build_research_features (research/research_edge_prototypes)
+```mermaid
+graph LR
+    subgraph D4[d4_paper_trader.py]
+        A1[load_settings<br/>data/ingestion]
+        A2[load_ohlcv<br/>data/ingestion]
+        A3[InstrumentSpec<br/>instruments]
+        A4[ExecutionEngine<br/>execution/engine]
+        A5[PaperBroker<br/>execution/broker]
+        A6[RiskManager<br/>risk/manager]
+        A7[build_research_features<br/>research/research_edge_prototypes]
+        A8[CandleRow / TradeInstruction<br/>signals]
+        A4 --> A5
+        A6 --> A3
+        A7 --> A8
+    end
+
+    subgraph FS[forward_shadow_donchian.py]
+        B1[load_ohlcv / load_settings<br/>data/ingestion]
+        B2[InstrumentSpec<br/>instruments]
+        B3[donchian_signals<br/>research/donchian_research_runner]
+        B4[build_research_features<br/>research/research_edge_prototypes]
+    end
+
+    subgraph DASH[Dashboard]
+        C1[load_settings<br/>data/ingestion]
+        C2[metrics.py]
+        C3[sqlite3 reads equity curve]
+        C4[streamlit]
+        C2 --> C3
+    end
+
+    style D4 fill:#533483,color:#fff
+    style FS fill:#0f3460,color:#fff
+    style DASH fill:#16213e,color:#fff
+```
 
 dashboard.py
   ├── load_settings (data/ingestion)

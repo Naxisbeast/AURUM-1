@@ -242,40 +242,50 @@ The D1 filter analysis (51 resolved TAKE decisions, WR=63%, PF=1.71) is the **mo
 
 ## 5. Architecture Review
 
-### 5.1 Current Architecture Diagram
+### 5.1 Current Architecture Diagram (as of June 2026)
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   AURUM-1 System                     │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  ┌───────────────────────┐  ┌─────────────────────┐ │
-│  │   Main Orchestrator   │  │  Donchian Shadow    │ │
-│  │   (orchestrator.py)   │  │  (standalone script)│ │
-│  │                       │  │                     │ │
-│  │  Mode: rule_regime    │  │  Strategy: raw_don  │ │
-│  │  Data: yfinance ✗     │  │  Data: OANDA API ✓  │ │
-│  │  Model: never trained │  │  Direction: BUY_ONLY│ │
-│  │  Trades: 6,834 paper  │  │  Trades: 32 shadow  │ │
-│  │  Status: DEAD         │  │  Status: DEAD       │ │
-│  └───────────────────────┘  └─────────────────────┘ │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │            Data Ingestion Layer              │   │
-│  │  OANDA API → cache DBs (working)            │   │
-│  │  yfinance → main DB (broken)                │   │
-│  │  FRED API → macro data (untested)           │   │
-│  │  Alpha Vantage → news (untested)            │   │
-│  │  CFTC → COT data (untested)                 │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │           Storage Layer (ALL SQLite)         │   │
-│  │  3 active DBs + 13 backtest DBs             │   │
-│  │  No replication, no backup verification     │   │
-│  │  No data integrity validation               │   │
-│  └──────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph AURUM[AURUM-1 System]
+        direction TB
+        subgraph ORCH[Main Orchestrator<br/>orchestrator.py]
+            MODE[Mode: rule_regime]
+            DATA[Data: yfinance X]
+            MODEL[Model: never trained]
+            TRADES[Trades: 6,834 paper]
+            STATUS[Status: DEAD]
+        end
+
+        subgraph SHADOW[Donchian Shadow<br/>standalone script]
+            STRAT[Strategy: raw_donchian]
+            SDATA[Data: OANDA API]
+            SDIR[Direction: BUY_ONLY]
+            STRADES[Trades: 32 shadow]
+            SSTATUS[Status: DEAD]
+        end
+
+        subgraph INGEST[Data Ingestion Layer]
+            I1[OANDA API -> cache DBs<br/>working]
+            I2[yfinance -> main DB<br/>broken]
+            I3[FRED API -> macro data<br/>untested]
+            I4[Alpha Vantage -> news<br/>untested]
+            I5[CFTC -> COT data<br/>untested]
+        end
+
+        subgraph STORE[Storage Layer - ALL SQLite]
+            S1[3 active DBs + 13 backtest DBs]
+            S2[No replication]
+            S3[No backup verification]
+            S4[No data integrity validation]
+        end
+    end
+
+    style ORCH fill:#e94560,color:#fff
+    style SHADOW fill:#e94560,color:#fff
+    style INGEST fill:#16213e,color:#fff
+    style STORE fill:#1a1a2e,color:#fff
+    style STATUS fill:#e94560,color:#fff
+    style SSTATUS fill:#e94560,color:#fff
 ```
 
 ### 5.2 Critical Architecture Issues
