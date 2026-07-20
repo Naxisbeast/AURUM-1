@@ -1,140 +1,143 @@
 # AURUM-1 Data Flow
 
-## End-to-End Pipeline
+## End-to-End Pipeline (Current Live System)
 
-```
-                    ┌──────────────┐
-                    │  OANDA API   │
-                    │  (practice)  │
-                    └──────┬───────┘
-                           │
-                           ▼
-                ┌──────────────────────┐
-                │  AurumDataIngestor   │
-                │  fetch_ohlcv()       │
-                └──────┬───────────────┘
-                       │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-  ┌─────────────┐ ┌──────────┐ ┌──────────┐
-  │ Main DB     │ │ Shadow  │ │ Backtest │
-  │ aurum1.sql  │ │ Cache   │ │ Cache    │
-  │ ite3        │ │ SQLite  │ │ SQLite   │
-  │ (trades     │ │         │ │          │
-  │  history)   │ │         │ │          │
-  └─────────────┘ └────┬─────┘ └──────────┘
-                        │
-              ┌─────────┴─────────┐
-              │                   │
-              ▼                   ▼
-  ┌──────────────────┐  ┌──────────────────┐
-  │ forward_shadow   │  │ donchian         │
-  │ _donchian.py     │  │ _research_runner │
-  │ (continuous      │  │ .py              │
-  │  service)        │  │ (run-once)       │
-  │                  │  │                  │
-  │ Reads M15        │  │ Reads M15        │
-  │ candles from     │  │ candles from     │
-  │ shadow cache     │  │ backtest cache   │
-  └────────┬─────────┘  └────────┬─────────┘
-           │                     │
-           ▼                     ▼
-  ┌──────────────────┐  ┌──────────────────┐
-  │ donchian_shadow  │  │ Backtest Result  │
-  │ .sqlite3         │  │ (SQLite + JSON)  │
-  │                  │  │                  │
-  │ 97 signals       │  │ Isolated per-run │
-  │ 34 trades        │  │ database         │
-  │ equity curve     │  │                  │
-  └────────┬─────────┘  └──────────────────┘
-           │
-           ▼
-  ┌──────────────────────────────────────┐
-  │  Phase Reports (S1-S5)              │
-  │                                      │
-  │  S1: Failure audit (32 trades)      │
-  │  S2: Context filter simulation      │
-  │  S3: Candidate replay (97 signals)  │
-  │  S4: Candidate lock decision        │
-  │  S5: D1 forward journal (ongoing)   │
-  └──────────────────────────────────────┘
-           │
-           ▼
-  ┌──────────────────────────────────────┐
-  │  Research Findings                   │
-  │  → Strategy improvements            │
-  │  → Rule changes                    │
-  │  → New variant deployment (D2)      │
-  └──────────────────────────────────────┘
+```mermaid
+graph TD
+    OA[OANDA API<br/>practice] --> FSD[forward_shadow_donchian.py<br/>Data pipeline service]
+    FSD --> MC[forward_shadow_market_cache.sqlite3<br/>M15 OHLCV candles]
+    MC --> D4[d4_paper_trader.py<br/>D4 Paper Trader]
+    D4 --> PB[PaperBroker<br/>in-memory execution]
+    PB --> PT[paper_trading.sqlite3<br/>trades, snapshots, signals]
+    PT --> DB[Dashboard<br/>Streamlit - reads only]
+
+    style OA fill:#e94560,color:#fff
+    style FSD fill:#0f3460,color:#fff
+    style MC fill:#1a1a2e,color:#fff
+    style D4 fill:#533483,color:#fff
+    style PB fill:#16213e,color:#fff
+    style PT fill:#1a1a2e,color:#fff
+    style DB fill:#0f3460,color:#fff
 ```
 
 ---
 
-## Main Pipeline (Orchestrator)
+## D4 Paper Trader Cycle
 
-```
-Every M15 candle close:
+Every 60 seconds:
 
-1. fetch_ohlcv("M15", count=3)       → OANDA API
-2. Append candle to OHLCV buffer      → In-memory DataFrame
-3. Build features                     → FeatureEngineer
-4. Predict regime                     → RegimeClassifier (ML/fallback)
-5. Predict direction                  → DirectionPredictor (ML/fallback)
-6. Score sentiment                    → SentimentScorer
-7. Ensemble signals                  → EnsembleSignal.combine()
-8. State machine                     → StateMachine.on_candle()
-9. If instruction emitted:
-   a. Evaluate risk                  → RiskManager.evaluate()
-   b. Execute order                  → ExecutionEngine.execute()
-   c. Log trade                      → trades_log table
-10. Log equity snapshot              → performance_log table
-11. Check weekly retraining          → optional
+```mermaid
+flowchart TD
+    subgraph "60-second poll cycle"
+        A[1. Read new candles<br/>from market cache] --> B[2. Compute features<br/>research_edge_prototypes]
+        B --> C[3. Donchian 20 breakout check]
+        C --> D{Breakout detected?}
+        D -->|Yes| E[4. RiskManager.evaluate]
+        D -->|No| F[5. PaperBroker.update_prices<br/>check SL/TP on open positions]
+        E --> G{Approved?}
+        G -->|Yes| H[6. ExecutionEngine -> PaperBroker<br/>submit order]
+        G -->|No| I[7. Log missed signal]
+        H --> F
+        I --> F
+        F --> J[8. Persist state<br/>trades, snapshots, health file]
+    end
+
+    style A fill:#16213e,color:#fff
+    style B fill:#16213e,color:#fff
+    style C fill:#16213e,color:#fff
+    style E fill:#0f3460,color:#fff
+    style F fill:#0f3460,color:#fff
+    style H fill:#533483,color:#fff
+    style J fill:#1a1a2e,color:#fff
 ```
 
 ---
 
-## Shadow Pipeline
+## Forward Shadow Pipeline (Data Collection)
 
-```
-Every 60 seconds (forward-shadow service):
+Every 60 seconds:
 
-1. fetch_ohlcv_range("M15", ...)     → OANDA API → market cache
-2. Load candles from cache            → safe_load_ohlcv()
-3. Build research features            → build_research_features()
-4. Generate Donchian signals          → donchian_signals()
-5. Simulate trades:
-   a. Check open position for exit    → maybe_close_position()
-   b. Process new signals             → enter if no position open
-   c. Compute P&L with slippage/spread
-6. Write to SQLite:
-   - shadow_signals
-   - shadow_trades
-   - shadow_equity_curve
-   - shadow_candles
-   - shadow_audit_snapshots
+```mermaid
+flowchart LR
+    subgraph "Data Collection"
+        A[fetch_ohlcv_range<br/>OANDA API] --> B[Market Cache<br/>forward_shadow_market_cache.sqlite3]
+    end
+
+    subgraph "Signal Generation"
+        C[Load candles from cache] --> D[Build research features]
+        D --> E[Generate Donchian signals]
+    end
+
+    subgraph "Simulation"
+        F[Check open position exits] --> G[Process new signals]
+        G --> H[Compute P&L with<br/>slippage + spread]
+    end
+
+    subgraph "Persistence"
+        I[Write to SQLite:<br/>shadow_signals, shadow_trades,<br/>shadow_equity_curve,<br/>shadow_candles, shadow_audit]
+    end
+
+    B --> C
+    E --> F
+    H --> I
+
+    style A fill:#e94560,color:#fff
+    style B fill:#1a1a2e,color:#fff
+    style E fill:#0f3460,color:#fff
+    style H fill:#533483,color:#fff
+    style I fill:#1a1a2e,color:#fff
 ```
 
 ---
 
 ## D1/D2 Shadow Pipeline
 
-```
-Every 15 minutes (timer):
+Every 15 minutes (timer-based):
 
-D1: 1. Read shadow signals from donchian_shadow.sqlite3
-    2. Apply D1 decision filter:
-       - HOLD if volatility == high
-       - HOLD if session == london
-       - TAKE otherwise
-    3. Simulate fixed 1R exit from candle data
-    4. Write to phase_s5_d1_shadow_journal.csv
+```mermaid
+flowchart TD
+    subgraph D1[D1 - Filtered Donchian 1R]
+        A1[Read shadow signals<br/>from donchian_shadow.sqlite3] --> B1[Apply D1 filter:<br/>HOLD if vol==high<br/>HOLD if session==London<br/>TAKE otherwise]
+        B1 --> C1[Simulate fixed 1R exit<br/>from candle data]
+        C1 --> D1[Write to<br/>phase_s5_d1_shadow_journal.csv]
+    end
 
-D2: 1. Read M15 candles from market cache
-    2. Generate Donchian signals
-    3. Apply same D1 filter (vol/session)
-    4. Simulate 1R exit with full P&L
-    5. Print JSON summary (for journalctl)
+    subgraph D2[D2 - Standalone Donchian 1R]
+        A2[Read M15 candles<br/>from market cache] --> B2[Generate Donchian signals]
+        B2 --> C2[Apply vol/session filter]
+        C2 --> D2[Simulate 1R exit<br/>with full P&L]
+        D2 --> E2[Print JSON summary<br/>to journalctl]
+    end
+
+    style D1 fill:#16213e,color:#fff
+    style D2 fill:#16213e,color:#fff
+    style D1 fill:#0f3460,color:#fff
+    style E2 fill:#533483,color:#fff
 ```
+
+---
+
+## Main Pipeline (Legacy Orchestrator)
+
+> **Note**: This pipeline is stopped since May 27, 2026. The D4 Paper Trader
+> replaced it with a simplified direct path.
+
+```mermaid
+flowchart LR
+    A[fetch_ohlcv M15 count=3<br/>OANDA API] --> B[Append to OHLCV buffer<br/>in-memory DataFrame]
+    B --> C[Build features<br/>FeatureEngineer]
+    C --> D[Predict regime<br/>RegimeClassifier]
+    D --> E[Predict direction<br/>DirectionPredictor]
+    E --> F[Score sentiment<br/>SentimentScorer]
+    F --> G[Ensemble signals<br/>EnsembleSignal.combine]
+    G --> H[State machine<br/>StateMachine.on_candle]
+    H --> I{Instruction emitted?}
+    I -->|Yes| J[Evaluate risk<br/>RiskManager.evaluate]
+    J --> K[Execute order<br/>ExecutionEngine.execute]
+    K --> L[Log trade<br/>trades_log table]
+    I -->|No| M[Log equity snapshot<br/>performance_log table]
+    L --> M
+
 
 ---
 
