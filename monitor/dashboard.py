@@ -31,6 +31,7 @@ from monitor.metrics import (
     load_equity_curve,
     load_system_health,
 )
+from monitor.evidence import EvidenceCollector
 
 
 def main() -> None:
@@ -48,6 +49,7 @@ def main() -> None:
 
     st.title("AURUM-1 Live Monitor")
     render_status_bar(status)
+    render_evidence_progress()
     render_equity_curve(equity_curve, settings)
     render_trade_chart(equity_curve, trades, settings)
     render_rolling_metrics(equity_curve, trades, window_days)
@@ -56,6 +58,34 @@ def main() -> None:
     render_system_health(db_path)
     render_trade_log(trades)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
+
+
+def render_evidence_progress() -> None:
+    """Render evidence collection progress bar."""
+    try:
+        collector = EvidenceCollector(ROOT)
+        report = collector.generate_report()
+    except Exception:
+        st.info("Evidence collection data not available yet.")
+        return
+
+    pct_to_50 = min(100.0, (report.total_trades / 50) * 100)
+    pct_to_100 = min(100.0, (report.total_trades / 100) * 100)
+
+    st.subheader("Evidence Collection Progress")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total Trades", str(report.total_trades))
+    col2.metric("Since 0.35%", str(report.trades_at_new_risk))
+    col3.metric("Risk Review Gate", f"{report.trades_remaining_to_50} left", f"{pct_to_50:.0f}%")
+    col4.metric("Strategy Gate", f"{report.trades_remaining_to_100} left", f"{pct_to_100:.0f}%")
+    col5.metric("Trade Rate", f"{report.trade_rate_per_day:.1f}/d")
+
+    st.progress(pct_to_50 / 100.0, text=f"Progress to 50-trade risk review: {report.total_trades}/50")
+
+    if report.risk_review_due:
+        st.success("50 trades reached — risk review due! Consider 0.50% risk review.")
+    if report.strategy_review_due:
+        st.success("100 trades reached — strategy review due!")
 
 
 def render_status_bar(status: dict[str, Any]) -> None:
