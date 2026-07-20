@@ -245,7 +245,14 @@ def test_paper_broker_sell_stop_gap_exits_at_adverse_open() -> None:
     assert trade["gross_pnl"] == pytest.approx(-10.0)
 
 
-def test_paper_broker_deducts_spread_fee_from_equity() -> None:
+def test_paper_broker_spread_cost_zeroed_after_audit() -> None:
+    """Spread cost is zeroed out — slippage model captures all friction.
+
+    As of Jul 20, 2026, _spread_cost() returns 0.0 because the folded-normal
+    slippage model (always adverse) on entry AND exit prices already captures
+    crossing the spread. Adding a separate spread line item double-counts
+    friction. See broker.py:_spread_cost docstring for the full reasoning.
+    """
     broker = make_paper_engine({"execution": {"slippage_std_pips": 0.0, "paper_spread_pips": 1.5}}).broker
     broker.submit_order(make_risk_order(direction="BUY", entry_price=2330.0, take_profit=2345.0, lot_size=0.10))
 
@@ -253,12 +260,9 @@ def test_paper_broker_deducts_spread_fee_from_equity() -> None:
 
     trade = broker._trade_history[-1]
     assert trade["gross_pnl"] == pytest.approx(150.0)
-    # Spread cost varies by session (1.0x-2.0x multiplier); compute expected
-    actual_spread = broker.get_current_spread_pips("XAU_USD")
-    expected_spread_cost = 2.0 * actual_spread * 0.01 * 10.0
-    assert trade["spread_cost"] == pytest.approx(expected_spread_cost, rel=0.01)
-    assert trade["net_pnl"] == pytest.approx(150.0 - expected_spread_cost)
-    assert broker.get_account_state().equity == pytest.approx(10149.70 - expected_spread_cost + 0.30)
+    assert trade["spread_cost"] == 0.0, "Spread cost zeroed after audit (slippage model captures friction)"
+    assert trade["net_pnl"] == trade["gross_pnl"], "net_pnl = gross_pnl when slippage=0"
+    assert broker.get_account_state().equity == pytest.approx(10150.0)
 
 
 def test_paper_broker_one_unit_one_pip_pnl_atomic_sanity() -> None:
@@ -391,6 +395,194 @@ def test_oanda_live_requires_live_trading_interlock(monkeypatch) -> None:
         assert "ALLOW_LIVE_TRADING" in str(exc)
     else:
         raise AssertionError("Expected OandaBroker live mode to require ALLOW_LIVE_TRADING")
+
+
+# ---------------------------------------------------------------------------
+# Extended OandaBroker tests
+# ---------------------------------------------------------------------------
+
+
+def test_oanda_broker_rejects_unapproved_order(monkeypatch) -> None:
+    """OandaBroker should reject orders not approved by RiskManager."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
+
+    result = broker.submit_order(make_risk_order(approved=False, rejection_reason="daily_loss_kill"))
+
+    assert result.success is False
+    assert result.rejection_reason == "risk_order_rejected"
+    assert result.broker == "oanda"
+
+
+def test_oanda_broker_rejects_wide_spread(monkeypatch) -> None:
+    """OandaBroker should reject when spread exceeds max."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}, "risk": {"max_spread_pips": 0.5}}))
+    broker.get_current_spread_pips = lambda instrument: 2.0  # type: ignore[method-assign]
+
+    result = broker.submit_order(make_risk_order())
+    assert result.success is False
+    assert result.rejection_reason == "spread_too_wide_at_execution"
+
+
+def test_oanda_broker_handles_fill_timeout(monkeypatch) -> None:
+    """OandaBroker should handle missing orderFillTransaction."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
+    broker._submit_limit_order = lambda data: {}  # type: ignore[method-assign]  # no fill transaction
+
+    result = broker.submit_order(make_risk_order())
+    assert result.success is False
+    assert result.rejection_reason == "fill_timeout"
+
+
+def test_oanda_broker_buy_payload(monkeypatch) -> None:
+    """BUY order payload should have positive units."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    order = make_risk_order(direction="BUY", stop_loss=2320.0, take_profit=2345.0)
+    order.units = 10.0
+
+    payload = broker._order_payload(order)
+
+    assert payload["type"] == "LIMIT"
+    assert payload["instrument"] == "XAU_USD"
+    assert payload["units"] == "10"
+    assert "stopLossOnFill" in payload
+    assert "takeProfitOnFill" in payload
+
+
+def test_oanda_broker_sell_payload_negative_units(monkeypatch) -> None:
+    """SELL order payload should have negative units."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    order = make_risk_order(direction="SELL", stop_loss=2340.0, take_profit=2315.0)
+    order.units = 10.0
+
+    payload = broker._order_payload(order)
+    assert payload["units"] == "-10"
+
+
+def test_oanda_broker_payload_time_in_force_is_gtc(monkeypatch) -> None:
+    """OANDA orders should use GTC time-in-force."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    payload = broker._order_payload(make_risk_order())
+    assert payload["timeInForce"] == "GTC"
+
+
+def test_oanda_broker_close_position_mocked(monkeypatch) -> None:
+    """OandaBroker should handle close_position with mocked response."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._close_oanda_position = lambda position_id: {  # type: ignore[method-assign]
+        "longOrderFillTransaction": {
+            "id": "close_123",
+            "price": "2335.00",
+            "units": "10",
+            "time": "2026-01-01T13:00:00Z",
+        }
+    }
+
+    result = broker.close_position("some_position", "manual_close")
+
+    assert result.success is True
+    assert result.order_id == "close_123"
+    assert result.fill_price == 2335.00
+    assert result.broker == "oanda"
+
+
+def test_oanda_broker_get_account_state_mocked(monkeypatch) -> None:
+    """OandaBroker should return AccountState from mocked API."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._account_summary = lambda: {  # type: ignore[method-assign]
+        "account": {
+            "NAV": "10500.00",
+            "balance": "10500.00",
+            "openTradeCount": 1,
+        }
+    }
+    broker._open_positions = lambda: {"positions": []}  # type: ignore[method-assign]
+
+    state = broker.get_account_state()
+
+    assert state.equity == 10500.0
+    assert state.balance == 10500.0
+    assert state.open_trade_count == 1
+
+
+def test_oanda_broker_spread_from_pricing(monkeypatch) -> None:
+    """OandaBroker should compute spread from bid/ask pricing."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._pricing = lambda instrument: {  # type: ignore[method-assign]
+        "prices": [{
+            "bids": [{"price": "2330.00"}],
+            "asks": [{"price": "2331.50"}],
+        }]
+    }
+
+    spread = broker.get_current_spread_pips("XAU_USD")
+    # (2331.50 - 2330.00) / 0.01 = 150 pips
+    assert spread == 150.0
+
+
+def test_oanda_broker_get_open_positions_mocked(monkeypatch) -> None:
+    """OandaBroker should parse open positions from API response."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._open_positions = lambda: {  # type: ignore[method-assign]
+        "positions": [{
+            "instrument": "XAU_USD",
+            "long": {"units": "10", "averagePrice": "2330.00", "unrealizedPL": "50.00"},
+            "short": {"units": "0", "averagePrice": "0.00", "unrealizedPL": "0.00"},
+        }]
+    }
+
+    positions = broker.get_open_positions()
+
+    assert len(positions) == 1
+    assert positions[0].direction == "BUY"
+    assert positions[0].units == 10.0
+    assert positions[0].open_price == 2330.0
+
+
+def test_oanda_broker_open_positions_empty(monkeypatch) -> None:
+    """OandaBroker should return empty list when no positions."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._open_positions = lambda: {"positions": []}  # type: ignore[method-assign]
+
+    positions = broker.get_open_positions()
+    assert len(positions) == 0
+
+
+def test_oanda_broker_close_position_no_fill(monkeypatch) -> None:
+    """OandaBroker should handle close when no fill transaction."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._close_oanda_position = lambda position_id: {}  # type: ignore[method-assign]
+
+    result = broker.close_position("some_pos", "test")
+    assert result.success is True  # still succeeds
+    assert result.fill_price is None
+
+
+def test_oanda_broker_live_mode_interlock(monkeypatch) -> None:
+    """Live mode without ALLOW_LIVE_TRADING should be blocked."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    monkeypatch.delenv("ALLOW_LIVE_TRADING", raising=False)
+    monkeypatch.setenv("OANDA_ENV", "live")
+
+    try:
+        OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    except RuntimeError as exc:
+        assert "ALLOW_LIVE_TRADING" in str(exc)
+    else:
+        raise AssertionError("Expected live mode to be blocked")
 
 
 def test_close_all_positions_paper() -> None:
