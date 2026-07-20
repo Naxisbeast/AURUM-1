@@ -58,3 +58,11 @@ jobs:
       - name: Execution engine and broker (no OANDA API key needed)
         run: |
           python -m pytest tests/test_phase6_execution.py -v --tb=short
+
+      - name: Dashboard metrics
+        run: |
+          python -m pytest tests/test_metrics.py -v --tb=short
+
+      - name: Forward shadow pipeline (CI-safe, no DB needed)
+        run: |
+          python -m pytest tests/test_forward_shadow_ci.py -v --tb=short
