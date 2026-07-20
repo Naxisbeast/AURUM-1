@@ -31,10 +31,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run unit tests (core modules)
+      - name: Core unit tests (risk, execution, instruments, signals)
         run: |
           python -m pytest tests/test_paper_broker.py tests/test_risk_manager.py tests/test_donchian_signals.py tests/test_instruments.py -v --tb=short
 
-      - name: Run D4 regression and sanity tests
+      - name: D4 regression and backtest sanity
         run: |
           python -m pytest tests/test_d4_regression.py tests/test_backtest_sanity.py -v --tb=short
+
+      - name: Phase 3 — Trade quality scoring
+        run: |
+          python -m pytest tests/test_trade_quality.py -v --tb=short
+
+      - name: Phase 3 — Prop firm simulator
+        run: |
+          python -m pytest tests/test_prop_firm_simulator.py -v --tb=short
+
+      - name: Phase 4 — Evidence collection
+        run: |
+          python -m pytest tests/test_evidence.py -v --tb=short
+
+      - name: Research edge prototypes
+        run: |
+          python -m pytest tests/test_research_edge_prototypes.py -v --tb=short
+
+      - name: Execution engine and broker (no OANDA API key needed)
+        run: |
+          python -m pytest tests/test_phase6_execution.py -v --tb=short
