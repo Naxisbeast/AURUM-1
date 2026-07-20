@@ -444,11 +444,15 @@ def load_system_health(db_path: str) -> dict[str, Any]:
     """Load system health indicators from the health file and paper DB.
 
     Reads the D4 paper trader health JSON and falls back to paper_trading DB.
+    Health file is at repo_root/run/d4_paper_trader_health.json (4 levels up
+    from aurum1/data/aurum1.sqlite3 or 3 levels up from whatever db_path is).
     Returns a dict suitable for dashboard display.
     """
     from pathlib import Path
 
-    root = Path(db_path).parent.parent
+    # Walk up to find repo root: aurum1/data/xxx.sqlite3 -> aurum1/data -> aurum1 -> .
+    db_parents = Path(db_path).resolve().parents
+    root = db_parents[2] if len(db_parents) > 2 else Path(".")
     health_file = root / "run" / "d4_paper_trader_health.json"
     health: dict[str, Any] = {
         "source": "none",
