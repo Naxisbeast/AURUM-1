@@ -310,7 +310,7 @@ def compute_mae_mfe(
     if trades.empty:
         return pd.DataFrame(columns=[
             "trade_id", "direction", "mae_pct", "mfe_pct", "mae_r", "mfe_r",
-            "mfe_mae_ratio", "efficiency", exit_reason or "exit_reason",
+            "mfe_mae_ratio", "efficiency", "exit_reason",
         ])
 
     results = []
