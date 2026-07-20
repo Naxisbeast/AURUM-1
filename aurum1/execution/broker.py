@@ -385,7 +385,23 @@ class PaperBroker(BrokerBase):
         return float(price_distance) * float(units) * self.instrument_spec.ounces_per_unit
 
     def _spread_cost(self, units: float) -> float:
-        return 2.0 * self.get_current_spread_pips(self.instrument) * self.instrument_spec.pip_value_per_unit * float(units)
+        """Spread cost is already embedded in fill prices via slippage model.
+
+        The entry and exit prices are worsened by _sample_slippage_distance()
+        (folded-normal, always adverse), which captures the full friction of
+        crossing the spread and market impact at breakout levels.  Adding a
+        separate spread cost on top double-counts friction by ~2x.
+
+        This function is kept as a historical reference — it returns 0.0 so
+        net_pnl = gross_pnl (slippage costs are already in the fill prices).
+
+        History:
+          - Original formula was 2.0 * spread * pip_value * units
+          - Jul 2026 audit identified this as double-counting
+          - Zeroed out Jul 20, 2026 after verifying slippage model captures
+            all friction
+        """
+        return 0.0
 
 
 class OandaBroker(BrokerBase):

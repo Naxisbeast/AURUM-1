@@ -393,8 +393,14 @@ class TestClosePosition:
 class TestSpreadCost:
     """Spread cost calculation during close."""
 
-    def test_spread_cost_deducted_on_close(self):
-        """Spread cost should reduce net PnL at close."""
+    def test_spread_cost_zeroed_after_audit(self):
+        """Spread cost is zeroed out — slippage model captures all friction.
+
+        As of Jul 20, 2026, _spread_cost() returns 0.0 because the folded-normal
+        slippage model (always adverse) on entry AND exit prices already captures
+        crossing the spread. Adding a separate spread line item double-counts
+        friction. See broker.py:_spread_cost docstring for the full reasoning.
+        """
         broker = PaperBroker(_settings(
             execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
         ))
@@ -405,8 +411,8 @@ class TestSpreadCost:
         broker.update_prices(_candle(open=102.0, high=106.0, low=101.0, close=105.0))
         assert len(broker._trade_history) == 1
         trade = broker._trade_history[0]
-        assert trade["spread_cost"] > 0, "Spread cost must be positive"
-        assert trade["net_pnl"] < trade["pnl"], "Fees should reduce PnL"
+        assert trade["spread_cost"] == 0.0, "Spread cost zeroed after audit (slippage model captures friction)"
+        assert trade["net_pnl"] == trade["pnl"], "net_pnl = gross_pnl when slippage=0"
 
     def test_spread_cost_zero_with_zero_spread(self):
         """Zero spread setting should produce zero spread cost."""
