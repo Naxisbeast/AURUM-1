@@ -70,7 +70,7 @@ class TestConstants:
         assert LOOKBACK == 20
 
     def test_risk_pct(self):
-        assert RISK_PER_TRADE_PCT == 0.0025
+        assert RISK_PER_TRADE_PCT == 0.0035
 
 
 class TestShadowSignal:

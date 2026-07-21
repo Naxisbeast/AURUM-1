@@ -2,7 +2,7 @@
 import sys, math
 from collections import Counter
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pandas as pd
 from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.instruments import InstrumentSpec
