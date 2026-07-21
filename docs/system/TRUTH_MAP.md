@@ -1,8 +1,8 @@
 # AURUM-1 Truth Map
 
 **Created**: 2026-07-18
-**Updated**: 2026-07-18 (Phase 1 stabilization complete)
-**Phases**: 0 (Forensic discovery) → 1 (Stabilization) → 2 (Validation)
+**Updated**: 2026-07-21 (Hardening v1.0 fully complete)
+**Phases**: 0 (Forensic discovery) → 1 (Stabilization) → 2 (Validation) → 3 (Analytics) → 4 (Evidence Collection)
 
 ---
 
@@ -345,39 +345,57 @@ Since `donchian_research_runner.py` was moved to `scripts/research/` during the 
 
 ### What the CI Pipeline Runs
 
-The GitHub Actions workflow (`.github/workflows/tests.yml`) runs:
+The GitHub Actions workflow (`.github/workflows/test.yml`) runs 9 groups (247 tests):
 
 ```yaml
-# Phase 1: Core unit tests
+# Core unit tests
 pytest tests/test_paper_broker.py tests/test_risk_manager.py tests/test_donchian_signals.py tests/test_instruments.py -v --tb=short
 
-# Phase 2: D4 regression + sanity
+# D4 regression + backtest sanity
 pytest tests/test_d4_regression.py tests/test_backtest_sanity.py -v --tb=short
+
+# Phase 3 analytics
+pytest tests/test_trade_quality.py tests/test_prop_firm_simulator.py -v --tb=short
+
+# Phase 4 evidence
+pytest tests/test_evidence.py -v --tb=short
+
+# Execution engine + OandaBroker
+pytest tests/test_phase6_execution.py -v --tb=short
+
+# Dashboard metrics
+pytest tests/test_metrics.py -v --tb=short
+
+# Forward shadow (CI-safe)
+pytest tests/test_forward_shadow_ci.py -v --tb=short
+
+# Dashboard render smoke tests
+pytest tests/test_dashboard_render.py -v --tb=short
+
+# Research edge prototypes
+pytest tests/test_research_edge_prototypes.py -v --tb=short
 ```
 
-### Test Coverage per Critical Module (Estimated)
+### Test Coverage per Critical Module (Post-Hardening)
 
-| Module | Lines | Test Lines | Test Coverage (approx) | Status |
-|--------|-------|-----------|----------------------|--------|
-| `instruments.py` | 105 | 99 (dedicated) | **~85%** | ✅ Good |
-| `risk/manager.py` | 218 | 321 (dedicated) | **~80%** | ✅ Good |
-| `execution/broker.py` | 619 | 390 (dedicated) | **~60%** | ⚠️ Marginal (OandaBroker untested) |
-| `execution/engine.py` | 104 | Shared with phase6 | **~50%** | ⚠️ Low |
-| `data/ingestion.py` | 1172 | 455 (phase1) | **~40%** | ⚠️ Low |
-| `d4_paper_trader.py` | 909 | 237 (d4_regression) | **~25%** | 🔴 Low |
-| `signals/state_machine.py` | 273 | 347 (phase4) | **~70%** | 🗄️ Legacy/doesn't matter |
-| `monitor/metrics.py` | 277 | 136 (phase8) | **~45%** | ⚠️ Low |
-| `monitor/dashboard.py` | 440+ | 0 dedicated | **~0%** | 🔴 Untested |
+| Module | Lines | Tests | Coverage | Status |
+|--------|-------|-------|----------|--------|
+| `instruments.py` | 105 | 12 (dedicated) | **~85%** | ✅ Good |
+| `risk/manager.py` | 218 | 21 (dedicated) | **~80%** | ✅ Good |
+| `execution/broker.py` | 619 | 41 (phase6) | **~70%** | ✅ Good (PaperBroker + OandaBroker mocked) |
+| `execution/engine.py` | 104 | Shared with phase6 | **~60%** | ⚠️ Adequate |
+| `d4_paper_trader.py` | 909 | 7 (d4_regression) | **~30%** | ⚠️ Improved (state recovery, missed signals added) |
+| `monitor/metrics.py` | ~310 | 27 (dedicated) | **~60%** | ✅ Good |
+| `monitor/dashboard.py` | ~470 | 3 (smoke tests) | **~10%** | ⚠️ Low (render functions untested) |
+| `monitor/trade_quality.py` | ~250 | 18 (dedicated) | **~70%** | ✅ Good |
+| `monitor/prop_firm_simulator.py` | ~220 | 20 (dedicated) | **~80%** | ✅ Good |
+| `forward_shadow` pipeline | ~1200 | 42 (CI) | **~40%** | ✅ Core logic tested |
 
-### Coverage Gaps (Critical)
+### Coverage Gaps (Remaining)
 
-1. **D4 Paper Trader** (909 lines) — only 237 lines of D4 regression tests. The main trading loop, state recovery, signal processing, missed signal logging, stale data detection, PID lock, and health file writing are **untested**.
-
-2. **PaperBroker** — slippage model, spread costing, close queue logic, OandaBroker all have weak coverage.
-
-3. **ExecutionEngine** — the logging layer has no dedicated tests.
-
-4. **Forward Shadow** — 0 CI coverage for the production data pipeline.
+1. **Dashboard render functions** still have minimal tests (Streamlit UI is hard to unit test).
+2. **D4 Paper Trader main loop** (`run_loop`, `process_candle`) not fully tested in isolation.
+3. **Data ingestion** (`aurum1/data/ingestion.py` at 1172 lines) — only tested via integration tests requiring a live DB.
 
 ### Test Suite Health
 
@@ -538,23 +556,25 @@ Per the hardening plan, Phase 0 is diagnosis only. Findings above inform Phase 1
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | `from scripts.donchian_research_runner` broken | ✅ Fixed — 6 files corrected |
-| 2 | No `__init__.py` for `scripts/` subpackages | ✅ Fixed — 8 packages created |
-| 3 | D4 Paper Trader restart state recovery untested | 🟡 Partially — 5 new tests added, more needed |
-| 4 | Health file `except: pass` | ✅ Fixed — now prints error |
-| 5 | Alert webhook `except: pass` | ✅ Fixed — now prints error |
-| 6 | Dashboard 0 tests | 🔴 Still untested |
-| 7 | Service unit files stale | ✅ Fixed — all 9 deploy files updated |
-| 8 | CI doesn't test forward shadow | 🔴 Still a gap |
+| 1 | `from scripts.donchian_research_runner` broken | ✅ Fixed |
+| 2 | No `__init__.py` for `scripts/` subpackages | ✅ Fixed |
+| 3 | D4 Paper Trader restart state recovery untested | ✅ Fixed — 3 new tests added |
+| 4 | Health file `except: pass` | ✅ Fixed |
+| 5 | Alert webhook `except: pass` | ✅ Fixed |
+| 6 | Dashboard 0 tests | ✅ Fixed — 27 metric tests + 3 render smoke tests |
+| 7 | Service unit files stale | ✅ Fixed |
+| 8 | CI doesn't test forward shadow | ✅ Fixed — 42 tests in CI |
 | 9 | `experiments/` directory legacy | ✅ Archived |
-| 10 | `aurum1/models/` all disabled | 🟡 Not archived (backtesting engine imports it) |
+| 10 | `aurum1/models/` all disabled | 🟡 Not archived (backtesting engine imports) |
 | 11 | `research/` markdown duplicates `docs/` | ✅ Archived |
 | 12 | `aurum1/orchestrator.py` legacy | ✅ Archived |
-| 13 | Shadow D3-D7 broken imports | ✅ Fixed (path resolution corrected) |
-| 14 | `archive/` directory didn't exist | ✅ Created with README |
-| 15 | Backtesting scripts have broken `parents[1]` ROOT | ✅ Fixed across 8 scripts |
-
-## 8. Phase 2 Validation Results (2026-07-18)
+| 13 | Shadow D3-D7 broken imports | ✅ Fixed |
+| 14 | `archive/` directory | ✅ Created with README |
+| 15 | Backtesting scripts broken `parents[1]` | ✅ Fixed |
+| 16 | All `scripts/` subtree `parents[1]` bugs | ✅ Fixed — 27 files total |
+| 17 | Forward shadow crashing post-deploy | ✅ Fixed (ROOT + risk constant) |
+| 18 | Stale systemd timers | ✅ Disabled (ML retrain, D1/D2/D3/D6/D7 shadows) |
+| 19 | Pre-commit hook not installed | ✅ Installed via .githooks |
 
 ### TC Stress Test
 | Scenario | Sharpe | PF | WR | MaxDD |
@@ -586,4 +606,30 @@ Per the hardening plan, Phase 0 is diagnosis only. Findings above inform Phase 1
 
 ---
 
-*Generated 2026-07-18. Phase 0 forensic scan + Phase 1 stabilization + Phase 2 validation complete.*
+## 9. Hardening Completion Status
+
+All phases of AURUM Hardening v1.0 are complete:
+
+| Phase | Status | Key Deliverables |
+|-------|--------|-----------------|
+| 0: Truth Map | ✅ | This document — forensic scan of entire repo |
+| 1: Stabilization | ✅ | 27 `parents[1]`→`parents[2]` fixes, 8 `__init__.py` files, dead code archived, silent errors fixed, 9 deploy templates updated |
+| 2: Validation | ✅ | Walk-forward (88.9% positive), Monte Carlo (0% ruin), TC stress (survives 6p+2p), risk sensitivity, ICIR decay — all confirmed no regression |
+| 3: Analytics | ✅ | Trade quality scoring, prop firm simulator, health dashboard, experiment framework |
+| 4: Evidence Collection | ✅ | Progress tracker built, server monitoring at 0.35% risk, 29 trades accumulated |
+
+### Gates Ahead
+- **50 trades** (~21 remaining, ~12 days projected): Risk review — consider 0.50%?
+- **100 trades** (~71 remaining, ~40 days projected): Strategy review — evaluate D4 vs backtest expectations
+
+### Final Repo Stats
+- **247 tests passing** (up from ~80 pre-hardening)
+- **27 `parents[1]`→`parents[2]` fixes** across the entire repo
+- **Dead code archived**: experiments/, orchestrator, ML models, research notes, exports, journey, phase audit modules
+- **3 audit-level bugs fixed**: favorable slippage model (folded-normal), Kelly double-cap, MAE/MFE UnboundLocalError
+- **2 pre-existing test bugs fixed**: close-all-positions missing engine init, spread test time-sensitive failure
+- **Server**: All 4 services active, 0.35% risk, stale timers disabled, pre-commit hook installed
+
+---
+
+*Generated 2026-07-18. Last updated 2026-07-21 with hardening v1.0 fully complete.*
