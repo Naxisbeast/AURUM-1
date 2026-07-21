@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPORT = ROOT / "reports" / "backtest_rule_regime.json"
 DEFAULT_OUTPUT_DIR = ROOT / "reports" / "research"
 

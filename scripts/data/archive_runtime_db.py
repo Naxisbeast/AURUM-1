@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     db_path = root / "aurum1" / "data" / "aurum1.sqlite3"
     backup_dir = root / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
