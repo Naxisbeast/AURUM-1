@@ -73,7 +73,15 @@ class BrokerBase(ABC):
 
 
 class PaperBroker(BrokerBase):
-    """In-memory broker simulation with simple slippage and SL/TP handling."""
+    """In-memory broker simulation with simple slippage and SL/TP handling.
+
+    Price collar: rejects order entry if the intended price deviates more than
+    PRICE_COLLAR_PCT from the current market price (based on recent candle data).
+    This is a hardcoded safety limit that cannot be overridden by settings.yaml.
+    """
+
+    # Hardcoded price collar: reject if entry price deviates >5% from market
+    PRICE_COLLAR_PCT = 5.0
 
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
@@ -100,6 +108,18 @@ class PaperBroker(BrokerBase):
         spread = self.get_current_spread_pips(self.instrument)
         if spread > float(self.risk_settings.get("max_spread_pips", 3.0)):
             return _rejected_order_result(order, "spread_too_wide_at_execution", "paper")
+
+        # Price collar: reject if entry deviates >5% from current market price
+        collar_price = self._current_market_price()
+        if collar_price is not None and collar_price > 0:
+            deviation = abs(float(order.instruction.entry_price) - collar_price) / collar_price * 100.0
+            if deviation > self.PRICE_COLLAR_PCT:
+                return _rejected_order_result(
+                    order,
+                    f"price_collar_violation: entry {order.instruction.entry_price:.2f} "
+                    f"is {deviation:.1f}% away from market {collar_price:.2f}",
+                    "paper",
+                )
 
         instruction = order.instruction
         units = self._order_units(order)
@@ -260,6 +280,12 @@ class PaperBroker(BrokerBase):
                 session_factor = 2.0  # Asian session — widest
             base *= session_factor
         return round(base, 1)
+
+    def _current_market_price(self) -> float | None:
+        """Return the most recent close price from candle history for price collar checks."""
+        if not self._candle_prices:
+            return None
+        return float(self._candle_prices[-1])
 
     def _close_position_at_price(self, position_id: str, close_price: float, reason: str) -> OrderResult:
         position = self._positions.pop(position_id)

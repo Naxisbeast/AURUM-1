@@ -1,0 +1,18 @@
+[Unit]
+Description=AURUM-1 Watchdog — independent D4 kill switch monitor
+Documentation=https://github.com/Naxisbeast/AURUM-1
+After=network-online.target aurum1-d4-paper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/aurum1
+Environment=PYTHONPATH=/opt/aurum1
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/monitor/watchdog.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
