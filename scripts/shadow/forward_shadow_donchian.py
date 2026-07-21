@@ -39,7 +39,7 @@ if sys.version_info[:2] != REQUIRED_PYTHON:
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -50,7 +50,7 @@ from scripts.research.research_edge_prototypes import build_research_features
 
 STRATEGY_NAME = "raw_donchian_fixed_2r"
 LOOKBACK = 20
-RISK_PER_TRADE_PCT = 0.0025
+RISK_PER_TRADE_PCT = 0.0035
 MIN_DURATION_MONTHS = 3
 DEFAULT_SHADOW_DB = ROOT / "reports" / "forward_shadow" / "donchian_shadow.sqlite3"
 DEFAULT_REPORT_DIR = ROOT / "reports" / "forward_shadow"
@@ -226,7 +226,7 @@ def assert_shadow_safety(settings: dict[str, Any]) -> None:
     if configured and str(configured.get("exit_mode", "FIXED")).upper() != "FIXED":
         raise RuntimeError("Forward shadow exit_mode is locked to FIXED")
     if configured and abs(float(configured.get("risk_per_trade_pct", RISK_PER_TRADE_PCT)) - RISK_PER_TRADE_PCT) > 1e-12:
-        raise RuntimeError("Forward shadow risk_per_trade_pct is locked at 0.25%")
+        raise RuntimeError(f"Forward shadow risk_per_trade_pct is locked at {RISK_PER_TRADE_PCT:.4f}")
     if configured and bool(configured.get("allow_oanda_orders", False)):
         raise RuntimeError("Forward shadow config must keep allow_oanda_orders=false")
     if str(os.getenv("OANDA_ENV", "practice")).lower() == "live":
