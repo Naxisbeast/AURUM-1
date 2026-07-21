@@ -98,3 +98,4 @@ node_modules/
 # Project memory and session handover docs
 CLAUDE.md
 docs/HANDOVER_AURUM_HARDENING.md
+run/
