@@ -490,3 +490,60 @@ class TestSessionAwareSpread:
         # Just verify it returns a reasonable value
         assert spread > 0
         assert isinstance(spread, float)
+
+
+class TestPriceCollar:
+    """Price collar protection against extreme price deviations."""
+
+    def test_normal_price_passes(self):
+        """Order at current market price should pass price collar."""
+        broker = PaperBroker(_settings(
+            execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
+        ))
+        # Seed a current price
+        broker._candle_prices.append(100.0)
+        order = _risk_order(_buy_instruction(entry=100.0))
+        result = broker.submit_order(order)
+        assert result.success
+
+    def test_slight_deviation_passes(self):
+        """Order within 5% of market should pass."""
+        broker = PaperBroker(_settings(
+            execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
+        ))
+        broker._candle_prices.append(100.0)
+        order = _risk_order(_buy_instruction(entry=103.0))  # 3% above market
+        result = broker.submit_order(order)
+        assert result.success
+
+    def test_extreme_deviation_rejected(self):
+        """Order >5% away from market should be rejected."""
+        broker = PaperBroker(_settings(
+            execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
+        ))
+        broker._candle_prices.append(100.0)
+        order = _risk_order(_buy_instruction(entry=120.0))  # 20% above market
+        result = broker.submit_order(order)
+        assert not result.success
+        assert "price_collar" in (result.rejection_reason or "")
+
+    def test_extreme_deviation_sell_rejected(self):
+        """SELL order >5% away from market should be rejected."""
+        broker = PaperBroker(_settings(
+            execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
+        ))
+        broker._candle_prices.append(100.0)
+        order = _risk_order(_sell_instruction(entry=80.0))  # 20% below market
+        result = broker.submit_order(order)
+        assert not result.success
+        assert "price_collar" in (result.rejection_reason or "")
+
+    def test_no_market_price_passes(self):
+        """Order without any market price history should pass (no collar to compare)."""
+        broker = PaperBroker(_settings(
+            execution={"slippage_std_pips": 0.0, "paper_spread_pips": 1.5},
+        ))
+        # No _candle_prices seeded
+        order = _risk_order(_buy_instruction(entry=100.0))
+        result = broker.submit_order(order)
+        assert result.success
