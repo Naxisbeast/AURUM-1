@@ -14,7 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from monitor.watchdog import (
+from monitor.d4_watchdog import (
     _check_thresholds,
     _read_health,
     _save_breach,
@@ -90,7 +90,7 @@ class TestReadHealth:
 
     def test_returns_none_for_missing_file(self):
         with tempfile.TemporaryDirectory() as td:
-            from monitor.watchdog import HEALTH_FILE
+            from monitor.d4_watchdog import HEALTH_FILE
             # Temporarily redirect HEALTH_FILE
             result = None
             # Monkey-patch approach: test the function with a non-existent path
@@ -112,7 +112,7 @@ class TestSaveBreach:
         with tempfile.TemporaryDirectory() as td, \
              tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=td) as f:
             breach_path = Path(f.name)
-            from monitor.watchdog import BREACH_FILE
+            from monitor.d4_watchdog import BREACH_FILE
             # Save original path, override, restore
             original = BREACH_FILE
             import monitor.watchdog as wd
@@ -133,7 +133,7 @@ class TestD4IsRunning:
 
     def test_returns_false_without_pid_file(self):
         with tempfile.TemporaryDirectory() as td:
-            from monitor.watchdog import PID_FILE
+            from monitor.d4_watchdog import PID_FILE
             original = PID_FILE
             import monitor.watchdog as wd
             wd.PID_FILE = Path(td) / "nonexistent.pid"
