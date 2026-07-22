@@ -8,7 +8,7 @@ I'm a Computer Science and Electronics student who became obsessed with a simple
 
 That question eventually became AURUM.
 
-This repository documents my journey of building an autonomous quantitative research platform  from failed experiments and overengineered ideas to statistically validated trading systems and the lessons they taught me along the way.
+This repository documents my journey of building an autonomous quantitative research platform — from failed experiments and overengineered ideas to statistically validated trading systems and the lessons they taught me along the way.
 
 The goal isn't to find a profitable strategy.
 
@@ -52,14 +52,14 @@ Every failed experiment is archived and documented because knowing why something
 
 ## Where It Stands
 
-D4  Donchian 20-bar breakout, 2R exit, BUY+SELL  is currently the strongest candidate discovered through research. It's paper trading autonomously on a cloud server at 0.35% risk per trade.
+D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the strongest candidate discovered through research. It's paper trading autonomously on a cloud server at 0.35% risk per trade.
 
 | Test | Result |
 |------|--------|
 | Walk-forward (18 windows, 11 years) | 88.9% positive windows |
 | Monte Carlo (10,000 simulations) | 0% ruin probability |
 | TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
-| Signal stationarity (ADF test) | ✅ Stationary  not trading noise |
+| Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
 | Live paper trades | 29 trades and counting |
 
 [Full status →](docs/STATUS.md)
@@ -111,7 +111,7 @@ flowchart TD
 - Data pipeline decoupled from trading (separate services)
 - PaperBroker handles SL/TP natively with session-aware spread and folded-normal slippage
 - Kill switches run in-process; a separate watchdog monitors independently
-- All trades, snapshots, and missed signals persist to SQLite  survives restart
+- All trades, snapshots, and missed signals persist to SQLite — survives restart
 
 ---
 
@@ -149,7 +149,7 @@ I'm still trying to answer all of them.
 
 1. **Data decides.** Not intuition. Not gut feel. Not what I want to be true.
 2. **Simplicity beats complexity.** If a 20-bar channel competes with a gradient-boosted ensemble, the channel wins.
-3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress  every number gets verified.
+3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress — every number gets verified.
 4. **Dead code gets archived.** The repo should tell the truth about what runs.
 5. **Every bug becomes documentation.** If it broke once, it'll break again.
 6. **Paper trading is a step, not the finish line.** It reveals what backtests can't (stale data, restart failures, real slippage patterns), but it's still simulated. Live capital is a different problem entirely.
@@ -221,7 +221,7 @@ archive/      Dead code preserved for reference
 
 | Document | What's Inside |
 |----------|--------------|
-| [JOURNEY.md](docs/JOURNEY.md) | The full story  why I started, what I learned, the bugs, the mistakes |
+| [JOURNEY.md](docs/JOURNEY.md) | The full story — why I started, what I learned, the bugs, the mistakes |
 | [STATUS.md](docs/STATUS.md) | Current operational state |
 | [TRUTH_MAP.md](docs/system/TRUTH_MAP.md) | Forensic map of the entire system |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and component interaction |
