@@ -1,6 +1,8 @@
 import sqlite3
+from pathlib import Path
 
-DB = r'C:\Users\thape\Desktop\Trading algorithim\aurum1\data\paper_trading.sqlite3'
+ROOT = Path(__file__).resolve().parents[2]
+DB = str(ROOT / 'aurum1' / 'data' / 'paper_trading.sqlite3')
 conn = sqlite3.connect(DB)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()

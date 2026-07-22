@@ -1,8 +1,10 @@
 """Comprehensive analysis of aurum1.sqlite3 for paper trader context."""
 import sqlite3
 import json
+from pathlib import Path
 
-conn = sqlite3.connect(r'C:\Users\thape\Desktop\Trading algorithim\aurum1\data\aurum1.sqlite3')
+ROOT = Path(__file__).resolve().parents[2]
+conn = sqlite3.connect(str(ROOT / 'aurum1' / 'data' / 'aurum1.sqlite3'))
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
