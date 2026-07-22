@@ -99,3 +99,5 @@ node_modules/
 run/
 CLAUDE.md
 CONTRIBUTING.md
+docs/HANDOVER_AURUM_HARDENING.md
+handover/
