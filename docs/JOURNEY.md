@@ -308,4 +308,4 @@ The point was to become the kind of engineer that knows how to discover one.
 
 ---
 
-*Started July 2026. Still learning. Still building.*
+*Started May 2026. Still learning. Still building.*
