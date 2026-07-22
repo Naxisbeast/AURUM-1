@@ -34,7 +34,7 @@
 
 ## 2. Actual Runtime Architecture
 
-### Live Services (all running on 178.105.245.66)
+### Live Services (all running on cloud server)
 
 ```mermaid
 graph TD
@@ -345,7 +345,7 @@ Since `donchian_research_runner.py` was moved to `scripts/research/` during the 
 
 ### What the CI Pipeline Runs
 
-The GitHub Actions workflow (`.github/workflows/test.yml`) runs 9 groups (247 tests):
+The GitHub Actions workflow (`.github/workflows/test.yml`) runs 10 groups (265 tests):
 
 ```yaml
 # Core unit tests
@@ -623,7 +623,7 @@ All phases of AURUM Hardening v1.0 are complete:
 - **100 trades** (~71 remaining, ~40 days projected): Strategy review — evaluate D4 vs backtest expectations
 
 ### Final Repo Stats
-- **247 tests passing** (up from ~80 pre-hardening)
+- **265 tests passing** (up from ~80 pre-hardening)
 - **27 `parents[1]`→`parents[2]` fixes** across the entire repo
 - **Dead code archived**: experiments/, orchestrator, ML models, research notes, exports, journey, phase audit modules
 - **3 audit-level bugs fixed**: favorable slippage model (folded-normal), Kelly double-cap, MAE/MFE UnboundLocalError
