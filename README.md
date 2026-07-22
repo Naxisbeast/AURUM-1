@@ -70,33 +70,41 @@ D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the stronges
 
 ## Architecture
 
-```
-                 RESEARCH                   
-                      ↓                     
-              STRATEGY VALIDATION           
-                      ↓                     
-                PAPER TRADING               
-                      ↓                     
-                 MONITORING                 
-                      ↓                     
-            EVIDENCE COLLECTION             
-                      ↓                     
-                 DECISIONS                  
+```mermaid
+graph TD
+    OA[OANDA API<br/>practice] --> FSD[forward_shadow_donchian.py<br/>Data pipeline service]
+    FSD --> MC[forward_shadow_market_cache.sqlite3<br/>M15 OHLCV candles]
+    MC --> D4[d4_paper_trader.py<br/>D4 Paper Trader]
+    D4 --> PB[PaperBroker<br/>in-memory execution]
+    PB --> PT[paper_trading.sqlite3<br/>trades, snapshots, signals]
+    PT --> DB[Dashboard<br/>Streamlit - reads only]
+
+    style OA fill:#e94560,color:#fff
+    style FSD fill:#0f3460,color:#fff
+    style MC fill:#1a1a2e,color:#fff
+    style D4 fill:#533483,color:#fff
+    style PB fill:#16213e,color:#fff
+    style PT fill:#1a1a2e,color:#fff
+    style DB fill:#0f3460,color:#fff
 ```
 
-**Technical architecture:**
+**End-to-end pipeline:** OANDA → forward shadow (data collection) → market cache → D4 paper trader → PaperBroker → paper trading DB → Streamlit dashboard.
 
-```
-OANDA API → Forward Shadow (data pipeline) → Market Cache (SQLite)
-                                                    ↓
-                                           D4 Paper Trader
-                                           (Donchian 20 · 2R · BUY+SELL)
-                                                    ↓
-                                           PaperBroker (simulated execution)
-                                                    ↓
-                                           Paper Trading DB (SQLite)
-                                                    ↓
-                                           Streamlit Dashboard → Cloudflare Tunnel
+```mermaid
+flowchart TD
+    subgraph "60-second poll cycle"
+        A[1. Read new candles<br/>from market cache] --> B[2. Compute features<br/>research_edge_prototypes]
+        B --> C[3. Donchian 20 breakout check]
+        C --> D{Breakout detected?}
+        D -->|Yes| E[4. RiskManager.evaluate]
+        D -->|No| F[5. PaperBroker.update_prices<br/>check SL/TP on open positions]
+        E --> G{Approved?}
+        G -->|Yes| H[6. ExecutionEngine -> PaperBroker<br/>submit order]
+        G -->|No| I[7. Log missed signal]
+        H --> F
+        I --> F
+        F --> J[8. Persist state<br/>trades, snapshots, health file]
+    end
 ```
 
 **Key decisions:**
@@ -219,4 +227,4 @@ archive/      Dead code preserved for reference
 
 ---
 
-*Started July 2026. Still learning. Still building.*
+*Started May 2026. Still learning. Still building.*
