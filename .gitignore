@@ -103,3 +103,4 @@ docs/HANDOVER_AURUM_HARDENING.md
 handover/
 docs/system/RESTRUCTURE_PLAN.md
 plans/
+tests/_test_trial_ledger.sqlite3

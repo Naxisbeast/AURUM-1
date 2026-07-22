@@ -1,9 +1,16 @@
-"""Tests for the append-only trial ledger."""
+"""Tests for the append-only trial ledger.
+
+Uses a temporary database for isolation — never writes to the real
+trial_ledger.sqlite3.
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+import aurum1.research.trial_ledger as ledger
 from aurum1.research.trial_ledger import (
     TrialRecord,
     log_trial,
@@ -11,6 +18,18 @@ from aurum1.research.trial_ledger import (
     trial_count,
     delete_trial,
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _isolated_db():
+    """Use a temp database so tests never touch the real trial_ledger.sqlite3."""
+    tmp = Path(__file__).resolve().parent / "_test_trial_ledger.sqlite3"
+    original = ledger.DB_PATH
+    ledger.DB_PATH = tmp
+    yield
+    ledger.DB_PATH = original
+    if tmp.exists():
+        tmp.unlink(missing_ok=True)
 
 
 def _make_record(variant_id: str = "D4", notes: str = "") -> TrialRecord:
