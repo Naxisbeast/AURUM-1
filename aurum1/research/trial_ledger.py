@@ -150,6 +150,8 @@ def delete_trial(trial_id: int | None = None, *, variant_id: str | None = None) 
 
     At least one of trial_id or variant_id must be provided.
     """
+    if trial_id is None and variant_id is None:
+        raise ValueError("Either trial_id or variant_id must be provided")
     conn = _init_db()
     try:
         if trial_id is not None:
