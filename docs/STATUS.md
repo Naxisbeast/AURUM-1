@@ -93,8 +93,37 @@ Total:             265 tests, all passing
 
 ## Pending Actions
 
-1. ⏳ **Sunday 20:00 UTC** — Deploy hardening updates + restart D4 at 0.35% risk
-2. 🔲 24h post-deploy monitoring
-3. 🔲 Accumulate 100+ trades at 0.35%
-4. 🔲 Phase 3: Analytics (trade scoring, prop firm sim, health dashboard)
-5. 🔲 Phase 4: Evidence collection for strategy review
+1. 🔲 Accumulate 50+ trades at 0.35%
+2. 🔲 Accumulate 100+ trades at 0.35%
+
+## Pre-Registered Gate Criteria
+
+These criteria are written *before* the trade counts are reached, to prevent moving the goalposts when the results are in.
+
+### 50-Trade Risk Review Gate (target: ~mid-August)
+
+The question: should risk increase from 0.35% to 0.50%?
+
+| Criterion | Pass | Fail |
+|-----------|------|------|
+| Maximum drawdown stays ≤15% | ✅ Proceed to 0.50% review | ❌ Stay at 0.35%, re-evaluate at 100 trades |
+| Daily loss kill switch never triggers | ✅ Proceed | ❌ Investigate root cause before any risk increase |
+| Win rate stays above 30% (not breakeven) | ✅ Proceed | ❌ Stay at 0.35% |
+| No execution infrastructure failures | ✅ Proceed | ❌ Fix before any risk increase |
+
+**If 3+ criteria fail**: demote D4 to shadow-only, investigate whether the 11-year backtest is no longer representative.
+
+### 100-Trade Strategy Review Gate (target: ~late September)
+
+The question: is D4's live performance consistent with the 11-year backtest?
+
+| Criterion | Pass | Fail |
+|-----------|------|------|
+| DSR ≥ 0.95 (against full trial history) | ✅ Strategy earns confidence | ❌ Extend to 200 trades before deciding. If still below 0.95 at 200, demote to shadow-only. |
+| Live Sharpe within 25% of backtest Sharpe | ✅ On track | ❌ Investigate regime change / execution degradation |
+| Live PF ≥ 1.05 | ✅ Positive edge confirmed | ❌ Stay in paper, no capital consideration |
+| Deflated Sharpe ≥ 0.95 | ✅ Statistically significant after selection-bias correction | ❌ D4 is likely the best of a noisy set — do not promote |
+| Additional stream or strategy identified | ✅ Progress toward portfolio | ❌ Acceptable if D4 is still producing |
+
+**If D4 clears all criteria at 100 trades**: consider first real-capital paper step (micro lot, monitored).
+**If D4 fails multiple criteria**: archive D4 in completed research, begin search for next candidate.
