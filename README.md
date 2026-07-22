@@ -152,7 +152,7 @@ I'm still trying to answer all of them.
 3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress  every number gets verified.
 4. **Dead code gets archived.** The repo should tell the truth about what runs.
 5. **Every bug becomes documentation.** If it broke once, it'll break again.
-6. **Production is the final backtest.** Paper trades reveal what backtests can't.
+6. **Paper trading is a step, not the finish line.** It reveals what backtests can't (stale data, restart failures, real slippage patterns), but it's still simulated. Live capital is a different problem entirely.
 7. **Failed experiments are still valuable.** Every rejected strategy taught me something.
 8. **Complexity must justify its existence.** Every filter and feature must prove it adds more edge than it removes.
 9. **Never optimise around short-term results.** 27 trades is noise. 100 trades is a conversation. 500 trades is evidence.
