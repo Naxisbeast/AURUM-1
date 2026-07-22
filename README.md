@@ -1,258 +1,141 @@
-# AURUM-1 🏆
+# AURUM-1
 
-**Autonomous algorithmic trading system for XAU/USD (Gold) on M15** — live paper trading on a cloud server with a proven Donchian breakout strategy. Up **+4.49% ($449)** peak in the first 13 days.
+**My public quantitative research laboratory.**
 
-> **Current status**: ✅ **D4 Paper Trader live** — executing autonomous Donchian 2R BUY+SELL trades on XAUUSD since Jul 2, 2026. 21 trades closed (11W / 10L), 52% win rate, net PnL **+$273**, equity **$10,428**.
-> 
-> 🖥️ **Live Dashboard**: **[https://wear-boot-jennifer-brush.trycloudflare.com](https://wear-boot-jennifer-brush.trycloudflare.com)**
-> 
-> 📊 [View Full Status →](docs/STATUS.md)
+I'm a Computer Science and Electronics student building an autonomous algorithmic trading research platform. This repository documents the system, the strategies, the failed experiments, and what I'm learning along the way.
+
+The goal isn't to find a profitable strategy. The goal is to build a system capable of honestly discovering one.
 
 ---
 
-## 🎯 The Strategy — D4 Donchian Breakout
+## What I'm Learning By Building This
 
-The simplest strategy wins. **D4** is pure price action:
-
-1. **Entry**: Buy when price breaks above the 20-bar high. Sell when it breaks below the 20-bar low.
-2. **Exit**: Fixed 2R — take profit at +2× risk, stop loss at -1× risk.
-3. **No filters**: No volatility filters, no session filters, no ML. Just clean breakouts.
-4. **Both directions**: BUY and SELL signals.
-
-| Metric | Walk-Forward (18 windows) | Live Trading (8 days) |
-|--------|:------------------------:|:---------------------:|
-| **Profit Factor** | 1.14 | — |
-| **Mean Sharpe** | 1.27 | — |
-| **Positive windows** | 88.9% (16/18) | — |
-| **Live Win Rate** | — | **52%** (11/21) |
-| **Live Net PnL** | — | **+$273** |
-| **Live Avg R** | — | **+0.57R** |
-| **Peak Equity** | — | **+$449** (+4.49%) |
-
-*Walk-forward: 11 years of M15 data, sliding 2yr train / 6mo test windows*
+- Algorithmic trading systems
+- Quantitative research methodologies
+- Monte Carlo simulations and walk-forward analysis
+- Risk management and position sizing
+- Cloud infrastructure and autonomous systems
+- Software architecture and testing
+- Data engineering and pipeline design
+- Market microstructure
+- AI-assisted development workflows
+- How often my assumptions are wrong
 
 ---
 
-## 📈 Live Performance
+## Where It Stands
+
+D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the strongest candidate discovered through research. It's paper trading autonomously on a cloud server at 0.35% risk per trade.
+
+**Evidence so far:**
+
+| Test | Result |
+|------|--------|
+| Walk-forward (18 windows, 11 years) | 88.9% positive windows |
+| Monte Carlo (10,000 simulations) | 0% ruin probability |
+| TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
+| Live paper trades | 29 trades |
+| Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
+
+[Full status →](docs/STATUS.md)
+[Live dashboard →](https://wear-boot-jennifer-brush.trycloudflare.com)
+[The full story →](docs/JOURNEY.md)
+
+---
+
+## Principles That Emerged
+
+1. **Data decides.** Not intuition. Not gut feel. Not what I want to be true.
+2. **Simplicity beats complexity.** If a 20-bar channel competes with a gradient-boosted ensemble, the channel wins.
+3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress — every number gets verified.
+4. **Dead code gets archived.** The repo should tell the truth about what runs.
+5. **Every bug becomes documentation.** If it broke once, it'll break again.
+6. **Production is the final backtest.** Paper trades reveal what backtests can't.
+7. **Failed experiments are still valuable.** Every rejected strategy taught me something.
+8. **Complexity must justify its existence.** Every filter and feature must prove it adds more edge than it removes.
+9. **Never optimise around short-term results.** 27 trades is noise. 100 trades is a conversation. 500 trades is evidence.
+
+---
+
+## Architecture
 
 ```
-Jul 02 — $10,000 ──► Start
-Jul 03 — $10,150 ──► +1.5%   (3 trades)
-Jul 07 — $10,214 ──► +2.1%   (first TP hit, DB fixed)
-Jul 08 — $10,384 ──► +3.8%   (SELL streak: 4 wins in a row)
-Jul 09 — $10,400 ──► +4.0%   (mixed BUY/SELL)
-Jul 10 — $10,350 ──► +3.5%   (drawdown: 3 stop losses)
-Jul 13 — $10,420 ──► +4.2%   (recovery: 3 SELL wins)
-Jul 14 — $10,449 ──► +4.5%   🏆 peak (20 trades)
-Jul 15 — $10,428 ──► +4.3%   (SELL hit SL, 21 trades, +$273 net)
+OANDA API → Forward Shadow (data pipeline) → Market Cache (SQLite)
+                                                    ↓
+                                           D4 Paper Trader
+                                           (Donchian 20 · 2R · BUY+SELL)
+                                                    ↓
+                                           PaperBroker (simulated execution)
+                                                    ↓
+                                           Paper Trading DB (SQLite)
+                                                    ↓
+                                           Streamlit Dashboard → Cloudflare Tunnel
 ```
+
+**Key decisions:**
+- Data pipeline decoupled from trading (separate services)
+- PaperBroker handles SL/TP natively with session-aware spread and folded-normal slippage
+- Kill switches run in-process; a separate watchdog service monitors independently
+- All trades, snapshots, and missed signals persist to SQLite — survives restart
 
 [**Live Dashboard →**](https://wear-boot-jennifer-brush.trycloudflare.com/)
 
 ---
 
-## 🔧 Quick Start
+## What Runs on the Server
+
+| Service | What It Does |
+|---------|-------------|
+| `aurum1-d4-paper.service` | D4 paper trader (autonomous, continuous) |
+| `aurum1-forward-shadow.service` | Market data pipeline (OANDA → cache) |
+| `aurum1-dashboard.service` | Streamlit live dashboard |
+| `aurum1-watchdog.service` | Independent kill switch monitor |
+| `aurum1-tunnel.service` | Cloudflare tunnel |
+
+---
+
+## Quick Start
 
 ```bash
-# Clone and enter
 git clone git@github.com:Naxisbeast/AURUM-1.git
 cd AURUM-1
-
-# Set up Python 3.12
 python3.12 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or: .venv\Scripts\Activate.ps1  # Windows
-
-# Install
+source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run tests
 python -m pytest -q --basetemp .pytest_tmp -p no:cacheprovider
 
-# Run D4 paper trader
+# Run D4 paper trader once
 python -m scripts.paper_trading.d4_paper_trader --run-once
 ```
 
 ---
 
-## 🏛️ Architecture
-
-```mermaid
-graph TB
-    subgraph Data["📡 DATA LAYER"]
-        OANDA[OANDA API<br/>Practice Account] --> FS[Forward Shadow<br/>Continuous Service]
-        FS --> MKT_CACHE[(Market Cache<br/>SQLite)]
-    end
-
-    subgraph Trading["🤖 TRADING LAYER"]
-        MKT_CACHE --> D4[D4 Paper Trader<br/>Donchian 20 · 2R · BUY+SELL]
-        D4 --> PB[PaperBroker<br/>Simulated Execution]
-        PB --> TRADE_DB[(Paper Trading DB<br/>SQLite)]
-    end
-
-    subgraph Research["🔬 RESEARCH LAYER"]
-        D1[D1 Shadow<br/>Filtered 1R]
-        D2[D2 Shadow<br/>BUY+Filter]
-        D3[D3 Shadow<br/>SELL+Filter]
-        D6[D6 Shadow<br/>ML Ensemble]
-        ML[ML Retrainer<br/>Weekly · Sat]
-    end
-
-    subgraph Validation["📊 VALIDATION"]
-        WF[Walk-Forward<br/>18 Windows]
-        MC[Monte Carlo<br/>10k Sims]
-        TC[TC Stress<br/>6p Spread Test]
-        IC[ICIR Decay<br/>Signal Horizon]
-    end
-
-    subgraph Monitoring["📈 MONITORING"]
-        DASH[Streamlit Dashboard<br/>Port 8501]
-        CF[Cloudflare Tunnel<br/>HTTPS Access]
-        HEALTH[Health File<br/>JSON Metrics]
-    end
-
-    subgraph Safety["🛡️ SAFETY"]
-        KILL[3 Kill Switches<br/>Daily · Drawdown · Spread]
-        INTERLOCK[Env Interlocks<br/>ALLOW_OANDA_ORDERS<br/>ALLOW_LIVE_TRADING]
-        BACKUP[Daily SQLite Backups<br/>>1 GB Total]
-    end
-
-    TRADE_DB --> DASH
-    MKT_CACHE --> DASH
-    DASH --> CF
-
-    MKT_CACHE --> Research
-    MKT_CACHE --> Validation
-    TRADE_DB --> Validation
-
-    D4 --> KILL
-    D4 --> INTERLOCK
-
-    style Data fill:#1e3a5f,color:#fff
-    style Trading fill:#1a4a3a,color:#fff
-    style Research fill:#4a3a1a,color:#fff
-    style Validation fill:#3a1a4a,color:#fff
-    style Monitoring fill:#1a3a4a,color:#fff
-    style Safety fill:#4a1a1a,color:#fff
-```
-
-**Key design decisions:**
-- **D4 is the best** — simplest configuration (Donchian 20, 2R, no filters) dominates over 11 years
-- **SELL signals essential** — add +$25,522 vs BUY-only over 11 years
-- **No ML needed** — D6 (ML ensemble) produces identical results to D4
-- **PaperBroker first** — real broker disabled by safety interlocks
-
----
-
-## 📋 All Strategy Variants
-
-| Rank | Variant | Entry | Exit | Direction | Trades | PF | Status |
-|:----:|---------|------|:---:|:---------:|:-----:|:--:|--------|
-| **1** | **D4 🏆** | Donchian 20 | 2R | BUY+SELL | 8,175 | **1.14** | **✅ Paper trading live** |
-| 2 | D6 | Donchian 20 + ML | 2R | BUY+SELL | 8,169 | 1.14 | 🟡 Shadow timer |
-| 3 | Raw | Donchian 20 | 2R | BUY only | 4,879 | 1.14 | 🔴 Running |
-| 4 | D2 | Donchian 20 | 1R | BUY only (filtered) | 6,890 | 1.03 | 🟡 Shadow timer |
-| 5 | D3 | Donchian 20 | 1R | BUY+SELL (filtered) | 3,544 | 1.02 | 🟡 Shadow timer |
-
-See [docs/STRATEGIES.md](docs/STRATEGIES.md) for full detail.
-
----
-
-## 🧪 Validation Results
-
-### Walk-Forward (18 windows over 11 years)
-| Metric | D4 (L20) | D4 (L55) |
-|--------|:--------:|:--------:|
-| Mean Sharpe | **1.11** | 0.61 |
-| Mean PF | **1.12** | 1.09 |
-| Positive windows | **82%** | 73% |
-| Mean MaxDD | 5.6% | **4.8%** |
-
-### TC Stress Test (D4 baseline: 1.5p spread / 0.5p slippage)
-| Scenario | Sharpe | vs Baseline |
-|----------|:------:|:-----------:|
-| Baseline | **1.11** | — |
-| Wide spread (2.5p) | 1.05 | -5.9% |
-| Stress: 4p + 1p slip | 0.92 | -17% |
-| **Max stress: 6p + 2p slip** | **0.75** | **-33%** ✅ Still profitable |
-
-### ICIR Signal Quality
-- **IC = -0.076** (p<0.001) — statistically significant but weak short-term predictive power
-- Profit comes from **asymmetric 2R payoff**, not signal timing
-- Decay: signal fades gracefully over 5 hours, no reversal (no overfitting)
-
-### Risk Sensitivity (Monte Carlo — 10k sims)
-| Risk/Trade | Med DD | 99th DD | Ruin |
-|:----------:|:------:|:-------:|:----:|
-| **0.25%** ⬅️ | **11.9%** | **20.3%** | **0%** |
-
----
-
-## 🚀 Deployed Cloud Services
-
-| Service | Function | Schedule |
-|---------|----------|----------|
-| `aurum1-d4-paper.service` | **🏆 D4 autonomous paper trader** | Continuous |
-| `aurum1-forward-shadow.service` | Market data cache (OANDA → SQLite) | Continuous |
-| `aurum1-dashboard.service` | **Streamlit live dashboard** (port 8501) | Continuous |
-| `aurum1-d1-shadow.timer` | D1 filtered 1R journal | Every 15 min |
-| `aurum1-d2-shadow.timer` | D2 comparison | Every 15 min |
-| `aurum1-d3-shadow.timer` | D3 SELL test | Every 15 min |
-| `aurum1-d4-shadow.timer` | D4 best variant comparison | Every 15 min |
-| `aurum1-d6-shadow.timer` | D6 ML variant comparison | Every 15 min |
-| `aurum1-ml-retrain.timer` | ML model retraining | Weekly (Sat) |
-
-**Server**: Ubuntu 24.04, 3.7GB RAM, 38GB disk (53% used), Python 3.12
-
----
-
-## 📁 Project Structure
+## Repository Structure
 
 ```
-aurum1/             # Core package (data, signals, risk, execution, models, backtesting)
-scripts/            # Run scripts, research tools, paper trader
-monitor/            # Dashboard (Streamlit) + metrics
-deploy/             # Systemd service definitions + logrotate
-docs/               # Documentation
-tests/              # Test suite (pytest)
-reports/            # Generated research reports (gitignored)
-```
-
-Full structure in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
-
-## 🛡️ Safety Interlocks
-
-Live trading is shielded behind multiple gates:
-1. **ALLOW_OANDA_ORDERS** — must be `true` to send real orders
-2. **ALLOW_LIVE_TRADING** — must be `true` for live capital
-3. **OANDA_ENV** — locked to `practice`
-4. **Risk manager** — daily loss kill, drawdown kill, spread filters
-
-```bash
-# Safe defaults (never change for production)
-ALLOW_OANDA_ORDERS=false
-ALLOW_LIVE_TRADING=false
-OANDA_ENV=practice
+aurum1/       Core library (data, signals, risk, execution, backtesting)
+scripts/      Executables (paper trader, research tools, shadows)
+monitor/      Dashboard, metrics, trade quality, prop firm sim, watchdog
+deploy/       Systemd service definitions
+docs/         Documentation
+tests/        265 tests
+archive/      Dead code preserved for reference
 ```
 
 ---
 
-## 📖 Documentation
+## Read More
 
-| Doc | What You'll Find |
-|-----|------------------|
-| [STATUS.md](docs/STATUS.md) | Live operational state, equity, trade log |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system design, component interaction |
-| [STRATEGIES.md](docs/STRATEGIES.md) | All strategy variants with performance |
-| [RESEARCH.md](docs/RESEARCH.md) | Research phases S1-S5, findings |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Server setup, systemd, monitoring |
-| [DATA_FLOW.md](docs/DATA_FLOW.md) | End-to-end data pipeline |
-| [journey/](journey/) | 🧑‍🎓 Student learning journal — real struggles and lessons |
+| Document | What's Inside |
+|----------|--------------|
+| [JOURNEY.md](docs/JOURNEY.md) | The full story — why I started, what I learned, the bugs, the mistakes |
+| [STATUS.md](docs/STATUS.md) | Current operational state |
+| [TRUTH_MAP.md](docs/system/TRUTH_MAP.md) | Forensic map of the entire system |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and component interaction |
+| [AUDIT_ROADMAP.md](docs/system/AUDIT_ROADMAP.md) | What's next for audit readiness |
 
 ---
 
-## 🏁 License
-
-Private — AURUM-1 Trading System. All rights reserved.
+*Started July 2026. Still learning. Still building.*
