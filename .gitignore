@@ -95,7 +95,5 @@ reports/backtest_execution_*.sqlite3
 # Frontend/dependency folders if added later
 node_modules/
 
-# Project memory and session handover docs
-CLAUDE.md
-docs/HANDOVER_AURUM_HARDENING.md
+# Runtime artifacts
 run/
