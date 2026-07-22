@@ -1,25 +1,52 @@
 # AURUM-1
 
-**My public quantitative research laboratory.**
+> My public quantitative research laboratory.
 
-I'm a Computer Science and Electronics student building an autonomous algorithmic trading research platform. This repository documents the system, the strategies, the failed experiments, and what I'm learning along the way.
+I'm a Computer Science and Electronics student who became obsessed with a simple question:
 
-The goal isn't to find a profitable strategy. The goal is to build a system capable of honestly discovering one.
+> How do professional trading systems know when they're actually right?
+
+That question eventually became AURUM.
+
+This repository documents my journey of building an autonomous quantitative research platform — from failed experiments and overengineered ideas to statistically validated trading systems and the lessons they taught me along the way.
+
+The goal isn't to find a profitable strategy.
+
+The goal is to build a system capable of honestly discovering one.
 
 ---
 
-## What I'm Learning By Building This
+## What AURUM Is
 
-- Algorithmic trading systems
-- Quantitative research methodologies
-- Monte Carlo simulations and walk-forward analysis
-- Risk management and position sizing
-- Cloud infrastructure and autonomous systems
-- Software architecture and testing
-- Data engineering and pipeline design
-- Market microstructure
-- AI-assisted development workflows
-- How often my assumptions are wrong
+Today AURUM is:
+
+- An autonomous paper trading system running on a cloud server
+- A quantitative research platform with 265 tests
+- A software engineering project I've rebuilt more times than I can count
+- A personal learning laboratory
+- A public journal of my growth as an engineer and researcher
+
+The strategies are temporary.
+
+The research process is the product.
+
+---
+
+## Things That Didn't Work
+
+Building AURUM has taught me that complexity is easy. Being correct is hard.
+
+Some failed experiments include:
+
+- Machine learning ensembles that added virtually no edge
+- Sophisticated market regime classifiers
+- Multi-stage state machine entry systems
+- Over-filtered breakout strategies
+- Incorrect slippage models that overstated returns
+- Broken persistence layers that could have lost trade history
+- Risk models that looked good on paper and failed in practice
+
+Every failed experiment is archived and documented because knowing why something doesn't work is often more valuable than knowing why it does.
 
 ---
 
@@ -27,15 +54,13 @@ The goal isn't to find a profitable strategy. The goal is to build a system capa
 
 D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the strongest candidate discovered through research. It's paper trading autonomously on a cloud server at 0.35% risk per trade.
 
-**Evidence so far:**
-
 | Test | Result |
 |------|--------|
 | Walk-forward (18 windows, 11 years) | 88.9% positive windows |
 | Monte Carlo (10,000 simulations) | 0% ruin probability |
 | TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
-| Live paper trades | 29 trades |
 | Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
+| Live paper trades | 29 trades and counting |
 
 [Full status →](docs/STATUS.md)
 [Live dashboard →](https://wear-boot-jennifer-brush.trycloudflare.com)
@@ -43,21 +68,23 @@ D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the stronges
 
 ---
 
-## Principles That Emerged
-
-1. **Data decides.** Not intuition. Not gut feel. Not what I want to be true.
-2. **Simplicity beats complexity.** If a 20-bar channel competes with a gradient-boosted ensemble, the channel wins.
-3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress — every number gets verified.
-4. **Dead code gets archived.** The repo should tell the truth about what runs.
-5. **Every bug becomes documentation.** If it broke once, it'll break again.
-6. **Production is the final backtest.** Paper trades reveal what backtests can't.
-7. **Failed experiments are still valuable.** Every rejected strategy taught me something.
-8. **Complexity must justify its existence.** Every filter and feature must prove it adds more edge than it removes.
-9. **Never optimise around short-term results.** 27 trades is noise. 100 trades is a conversation. 500 trades is evidence.
-
----
-
 ## Architecture
+
+```
+                 RESEARCH                   
+                      ↓                     
+              STRATEGY VALIDATION           
+                      ↓                     
+                PAPER TRADING               
+                      ↓                     
+                 MONITORING                 
+                      ↓                     
+            EVIDENCE COLLECTION             
+                      ↓                     
+                 DECISIONS                  
+```
+
+**Technical architecture:**
 
 ```
 OANDA API → Forward Shadow (data pipeline) → Market Cache (SQLite)
@@ -75,22 +102,76 @@ OANDA API → Forward Shadow (data pipeline) → Market Cache (SQLite)
 **Key decisions:**
 - Data pipeline decoupled from trading (separate services)
 - PaperBroker handles SL/TP natively with session-aware spread and folded-normal slippage
-- Kill switches run in-process; a separate watchdog service monitors independently
+- Kill switches run in-process; a separate watchdog monitors independently
 - All trades, snapshots, and missed signals persist to SQLite — survives restart
-
-[**Live Dashboard →**](https://wear-boot-jennifer-brush.trycloudflare.com/)
 
 ---
 
-## What Runs on the Server
+## What I'm Learning By Building This
 
-| Service | What It Does |
-|---------|-------------|
-| `aurum1-d4-paper.service` | D4 paper trader (autonomous, continuous) |
-| `aurum1-forward-shadow.service` | Market data pipeline (OANDA → cache) |
-| `aurum1-dashboard.service` | Streamlit live dashboard |
-| `aurum1-watchdog.service` | Independent kill switch monitor |
-| `aurum1-tunnel.service` | Cloudflare tunnel |
+- Algorithmic trading systems
+- Quantitative research methodologies
+- Monte Carlo simulations and walk-forward analysis
+- Risk management and position sizing
+- Cloud infrastructure and autonomous systems
+- Software architecture and testing
+- Data engineering and pipeline design
+- Market microstructure
+- AI-assisted development workflows
+- Learning to prove my own assumptions wrong
+
+---
+
+## Questions I'm Trying to Answer
+
+Building AURUM is really an excuse to answer difficult questions:
+
+- What makes a trading strategy robust?
+- Can simplicity consistently outperform complexity?
+- How much evidence is enough before trusting a strategy?
+- How should autonomous systems manage risk?
+- What can software engineering teach us about financial systems?
+- Can one person build an honest quantitative research process?
+
+I'm still trying to answer all of them.
+
+---
+
+## Principles That Emerged
+
+1. **Data decides.** Not intuition. Not gut feel. Not what I want to be true.
+2. **Simplicity beats complexity.** If a 20-bar channel competes with a gradient-boosted ensemble, the channel wins.
+3. **No strategy earns trust without evidence.** Walk-forward, Monte Carlo, TC stress — every number gets verified.
+4. **Dead code gets archived.** The repo should tell the truth about what runs.
+5. **Every bug becomes documentation.** If it broke once, it'll break again.
+6. **Production is the final backtest.** Paper trades reveal what backtests can't.
+7. **Failed experiments are still valuable.** Every rejected strategy taught me something.
+8. **Complexity must justify its existence.** Every filter and feature must prove it adds more edge than it removes.
+9. **Never optimise around short-term results.** 27 trades is noise. 100 trades is a conversation. 500 trades is evidence.
+10. **No strategy gets promoted without earning it.**
+
+---
+
+## What's Next
+
+**Current phase:**
+- Autonomous paper trading at 0.35% risk
+- Evidence collection toward 50-trade risk review gate
+- Analytics pipeline development
+
+**Near term:**
+- Real-time execution analytics
+- Prop firm challenge simulations
+- Multi-strategy experimentation framework
+- Improved dashboard and monitoring
+
+**Long term:**
+- Multi-asset quantitative research
+- Portfolio-level strategy management
+- Advanced ML experimentation
+- Real capital deployment (only if the evidence supports it)
+
+No strategy gets promoted without earning it.
 
 ---
 
@@ -103,7 +184,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run tests
+# Run tests (265 tests)
 python -m pytest -q --basetemp .pytest_tmp -p no:cacheprovider
 
 # Run D4 paper trader once
