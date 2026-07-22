@@ -47,7 +47,7 @@ Jul 14 — $10,449 ──► +4.5%   🏆 peak (20 trades)
 Jul 15 — $10,428 ──► +4.3%   (SELL hit SL, 21 trades, +$273 net)
 ```
 
-[**Live Dashboard →**](http://178.105.245.66:8501)
+[**Live Dashboard →**](https://wear-boot-jennifer-brush.trycloudflare.com/)
 
 ---
 
