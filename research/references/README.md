@@ -4,7 +4,7 @@ Key papers that influenced AURUM's methodology.
 
 ## Deflated Sharpe Ratio
 
-**Bailey, D. H., & López de Prado, M. (2014).** *The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality.* Journal of Portfolio Management, 40(3), 94-107.
+**Bailey, D. H., & López de Prado, M. (2014).** *The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality.* Journal of Portfolio Management, 40(5), 94-107.
 
 Corrects the Sharpe ratio for:
 1. Multiple testing — if you test enough variants, one will look great by chance
