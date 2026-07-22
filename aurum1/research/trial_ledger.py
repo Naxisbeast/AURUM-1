@@ -31,7 +31,8 @@ from typing import Any
 DB_PATH = Path(__file__).resolve().parents[2] / "aurum1" / "data" / "trial_ledger.sqlite3"
 SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS trials (
-        variant_id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variant_id TEXT,
         parent_family TEXT,
         n_obs INTEGER,
         sharpe REAL,
@@ -88,12 +89,14 @@ def _init_db() -> sqlite3.Connection:
 
 
 def log_trial(record: TrialRecord) -> None:
-    """Append a trial record to the ledger. Idempotent on variant_id."""
+    """Append a trial record to the ledger. Each call creates a new row,
+    preserving history even if the same variant_id is logged again (e.g.
+    after a data refresh or parameter change)."""
     record.logged_at = datetime.now(UTC).isoformat()
     conn = _init_db()
     try:
         conn.execute(
-            """INSERT OR REPLACE INTO trials
+            """INSERT INTO trials
                (variant_id, parent_family, n_obs, sharpe, skew, kurtosis,
                 return_series_path, notes, logged_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -107,15 +110,17 @@ def log_trial(record: TrialRecord) -> None:
 def get_all_trials(family: str | None = None) -> list[dict[str, Any]]:
     """Retrieve all trials, optionally filtered by parent_family."""
     conn = _init_db()
+    cur = conn.cursor()
     try:
         if family:
-            rows = conn.execute(
+            cur.execute(
                 "SELECT * FROM trials WHERE parent_family = ? ORDER BY logged_at",
                 (family,),
-            ).fetchall()
+            )
         else:
-            rows = conn.execute("SELECT * FROM trials ORDER BY logged_at").fetchall()
-        cols = [desc[0] for desc in conn.description]
+            cur.execute("SELECT * FROM trials ORDER BY logged_at")
+        rows = cur.fetchall()
+        cols = [desc[0] for desc in cur.description] if rows else []
         return [dict(zip(cols, row)) for row in rows]
     finally:
         conn.close()

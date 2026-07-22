@@ -115,7 +115,7 @@ class TestSaveBreach:
             from monitor.d4_watchdog import BREACH_FILE
             # Save original path, override, restore
             original = BREACH_FILE
-            import monitor.watchdog as wd
+            import monitor.d4_watchdog as wd
             wd.BREACH_FILE = breach_path
             try:
                 health = _make_health(drawdown_pct=20.0)
@@ -135,7 +135,7 @@ class TestD4IsRunning:
         with tempfile.TemporaryDirectory() as td:
             from monitor.d4_watchdog import PID_FILE
             original = PID_FILE
-            import monitor.watchdog as wd
+            import monitor.d4_watchdog as wd
             wd.PID_FILE = Path(td) / "nonexistent.pid"
             try:
                 assert not _d4_is_running()

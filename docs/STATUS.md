@@ -119,10 +119,9 @@ The question: is D4's live performance consistent with the 11-year backtest?
 
 | Criterion | Pass | Fail |
 |-----------|------|------|
-| DSR ≥ 0.95 (against full trial history) | ✅ Strategy earns confidence | ❌ Extend to 200 trades before deciding. If still below 0.95 at 200, demote to shadow-only. |
+| DSR ≥ 0.95 (against full trial history) | ✅ Strategy earns confidence | ❌ Extend to 200 trades. If still below 0.95 at 200, demote to shadow-only. D4 is likely the best of a noisy set. |
 | Live Sharpe within 25% of backtest Sharpe | ✅ On track | ❌ Investigate regime change / execution degradation |
 | Live PF ≥ 1.05 | ✅ Positive edge confirmed | ❌ Stay in paper, no capital consideration |
-| Deflated Sharpe ≥ 0.95 | ✅ Statistically significant after selection-bias correction | ❌ D4 is likely the best of a noisy set — do not promote |
 | Additional stream or strategy identified | ✅ Progress toward portfolio | ❌ Acceptable if D4 is still producing |
 
 **If D4 clears all criteria at 100 trades**: consider first real-capital paper step (micro lot, monitored).
