@@ -1,6 +1,6 @@
 # AURUM-1 Deployment Guide
 
-**Last updated**: 2026-07-05
+**Last updated**: 2026-07-21 (Hardening v1.0 complete)
 
 ## Server Architecture
 
