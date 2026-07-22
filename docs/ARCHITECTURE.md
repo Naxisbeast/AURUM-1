@@ -1,148 +1,63 @@
 # AURUM-1 System Architecture
 
-## Overview
+**Note**: This document describes the current live system (D4 Paper Trader).
+The original ML orchestrator architecture has been archived — see `archive/aurum1/orchestrator.py` for reference.
 
-AURUM-1 follows a layered architecture with strict dependency rules:
-each layer only calls the layer below it.
+---
 
-### Layered Architecture
+## Data Flow
 
-```mermaid
-graph TD
-    O[Orchestrator Layer<br/>Coordinates data->features->models->signals->risk->execution<br/>Manages threads, health endpoint, retraining scheduler]
-
-    O --> E[Execution Layer]
-
-    subgraph E[Execution Layer]
-        EE[ExecutionEngine<br/>Routes orders, logs trades]
-        BB[BrokerBase]
-        PB[PaperBroker]
-        OB[OandaBroker<br/>OANDA v20]
-        BB --- PB
-        BB --- OB
-    end
-
-    E --> R[Risk Layer]
-
-    subgraph R[Risk Layer]
-        RM[RiskManager]
-        K[Kelly optimal sizing]
-        PL[Portfolio risk limits - max 3%]
-        DL[Daily loss kill switch - -3%]
-        TD[Total drawdown kill switch - -8%]
-        SF[Spread filters - >3 pips reject]
-        REC[Recovery mode - halve risk<br/>during drawdown]
-        RC[Regime-conflict detection]
-    end
-
-    R --> S[Signal Layer]
-
-    subgraph S[Signal Layer]
-        SM[StateMachine]
-        SC[SCANNING]
-        AR[ARMED]
-        WO[WINDOW_OPEN]
-        TR[TRADE]
-        SC --> AR --> WO --> TR
-    end
-
-    S --> M[Model / Signal Layer]
-
-    subgraph M[Model / Signal Layer]
-        RC2[Regime Classifier]
-        DP[Direction Predictor]
-        SS[Sentiment Scorer]
-        ENS[Ensemble Signal<br/>direction x regime x sentiment]
-        RC2 --> ENS
-        DP --> ENS
-        SS --> ENS
-    end
-
-    M --> F[Feature Layer]
-
-    subgraph F[Feature Layer]
-        FE[FeatureEngineer]
-        OHLCV[OHLCV <br/>ATR, ADX, EMA, BB, MACD, RSI]
-        MACRO[Macro <br/>DXY, VIX, Real Yield, CPI]
-        COT[COT <br/>Net Long/Short, Open Interest]
-        TIME[Time <br/>Session labels, Cyclical encoding]
-    end
-
-    F --> D[Data Ingestion Layer]
-
-    subgraph D[Data Ingestion Layer]
-        DI[AurumDataIngestor]
-        OANDA[OANDA API <br/>OHLCV M5, M15, H1, H4, D1]
-        FRED[FRED API <br/>Macro DGS10, CPI]
-        YH[Yahoo Finance <br/>DXY, VIX]
-        AV[Alpha Vantage <br/>News headlines]
-        CFTC[CFTC <br/>COT data]
-    end
-
-    style O fill:#1a1a2e,stroke:#e94560,color:#fff
-    style E fill:#16213e,stroke:#0f3460,color:#fff
-    style R fill:#16213e,stroke:#0f3460,color:#fff
-    style S fill:#16213e,stroke:#0f3460,color:#fff
-    style M fill:#16213e,stroke:#0f3460,color:#fff
-    style F fill:#16213e,stroke:#0f3460,color:#fff
-    style D fill:#16213e,stroke:#0f3460,color:#fff
+```
+OANDA API (practice)
+    ↓
+forward_shadow_donchian.py (continuous service — polls every 60s)
+    ↓
+forward_shadow_market_cache.sqlite3 (M15 OHLCV candles)
+    ↓
+d4_paper_trader.py (continuous service — polls every 60s)
+    ↓
+PaperBroker (in-memory simulated execution)
+    ↓
+paper_trading.sqlite3 (trades, snapshots, missed signals)
+    ↓
+Streamlit Dashboard (reads only, served via nginx → Cloudflare Tunnel)
 ```
 
 ---
 
-## Research Layer (Parallel System)
+## 60-Second Poll Cycle
 
-The research system is independent of the main trading pipeline:
+Every 60 seconds, the D4 Paper Trader:
 
-```mermaid
-graph LR
-    OA[OANDA API] --> MC[Market Cache]
-    MC --> FSD[forward_shadow_donchian.py]
-    FSD --> DS[donchian_shadow.sqlite3<br/>signals, trades, equity curve]
-    DS --> PR[Phase Reports S1-S5]
-    PR --> RF[Research Findings]
-
-    PR --> RD2[Raw Donchian 2R<br/>continuous service]
-    PR --> D1[D1 1R+filter<br/>15-min timer]
-    PR --> D2[D2 1R+filter<br/>15-min timer]
-
-    style OA fill:#e94560,color:#fff
-    style FSD fill:#0f3460,color:#fff
-    style DS fill:#1a1a2e,color:#fff
-    style RF fill:#533483,color:#fff
-```
+1. Reads new candles from the market cache
+2. Computes features (ATR, Donchian levels)
+3. Checks for Donchian 20 breakout (close > 20-bar high or < 20-bar low)
+4. If breakout: evaluates via RiskManager (Kelly sizing, kill switches)
+5. If approved: submits order to PaperBroker
+6. PaperBroker checks SL/TP on all open positions every cycle
+7. Persists state: trades, account snapshots, health file
 
 ---
 
-## Storage Architecture
+## Layer Architecture
 
-```mermaid
-graph TD
-    subgraph data[aurum1/data/]
-        A1[aurum1.sqlite3<br/>Main trade log & performance]
-        FMC[forward_shadow_market_cache.sqlite3<br/>OANDA market data for shadow]
-        BMC[backtest_market_cache.sqlite3<br/>OANDA market data for backtest]
-    end
-
-    subgraph reports[reports/]
-        subgraph fs[forward_shadow/]
-            DS2[donchian_shadow.sqlite3<br/>Shadow ledger - 97 signals, 34 trades]
-            D2S[donchian_d2_shadow.sqlite3<br/>D2 shadow ledger]
-            CSV[phase_s*.csv<br/>Phase research CSVs]
-            JSON[phase_s*.json<br/>Phase research summaries]
-            WK[donchian_shadow_weekly_*.json<br/>Weekly performance reports]
-        end
-        BE[backtest_execution_*.sqlite3<br/>Isolated backtest DBs]
-        RES[research/<br/>Research JSON/CSV outputs]
-    end
-
-    subgraph backups[backups/forward_shadow/]
-        BAK[Daily SQLite backups<br/>28 days retained]
-    end
-
-    style data fill:#16213e,color:#fff
-    style reports fill:#1a1a2e,color:#fff
-    style backups fill:#0f3460,color:#fff
+```
+┌─────────────────────────────────────────────┐
+│ Execution Layer                              │
+│  ExecutionEngine → PaperBroker / OandaBroker │
+├─────────────────────────────────────────────┤
+│ Risk Layer                                   │
+│  RiskManager (Kelly sizing, kill switches)    │
+├─────────────────────────────────────────────┤
+│ Signal Layer                                 │
+│  Donchian 20 breakout (no state machine)      │
+├─────────────────────────────────────────────┤
+│ Feature Layer                                │
+│  research_edge_prototypes (ATR, Donchian)     │
+├─────────────────────────────────────────────┤
+│ Data Layer                                   │
+│  load_ohlcv, load_settings (SQLite)           │
+└─────────────────────────────────────────────┘
 ```
 
 ---
@@ -153,31 +68,41 @@ graph TD
 graph TD
     AO[ALLOW_OANDA_ORDERS=false] --> AL[ALLOW_LIVE_TRADING=false]
     AL --> OE[OANDA_ENV=practice]
-    OE --> FC[Forward shadow: fails closed<br/>if incorrectly configured]
-    FC --> RM2[Risk Manager: kill switches<br/>daily loss, drawdown]
-    RM2 --> PB2[PaperBroker: in-memory only<br/>no external connectivity]
+    OE --> RM[RiskManager<br/>daily loss kill<br/>drawdown kill<br/>spread filter<br/>Kelly sizing]
+    RM --> WD[d4_watchdog<br/>independent process<br/>DD>15% kill<br/>daily loss>10% kill<br/>stale data>6h kill]
+    RM --> PC[Price collar<br/>>5% from market<br/>rejects order]
 
     style AO fill:#e94560,color:#fff
     style AL fill:#e94560,color:#fff
     style OE fill:#e94560,color:#fff
-    style PB2 fill:#533483,color:#fff
+    style WD fill:#533483,color:#fff
+    style PC fill:#533483,color:#fff
 ```
 
 ---
 
-## Threading Model
+## Services (Server)
 
-The orchestrator runs on the main thread with three background threads:
+| Service | Function | Type |
+|---------|----------|------|
+| `aurum1-d4-paper.service` | D4 Paper Trader | Continuous |
+| `aurum1-forward-shadow.service` | Market data pipeline | Continuous |
+| `aurum1-dashboard.service` | Streamlit dashboard | Continuous |
+| `aurum1-watchdog.service` | Independent kill switch monitor | Continuous |
+| `aurum1-tunnel.service` | Cloudflare tunnel | Continuous |
+| `aurum1-d4-shadow.timer` | D4 shadow analysis | Every 15 min |
 
-| Thread | Purpose | Interval |
-|--------|---------|----------|
-| Main | M15 candle processing loop | Every 15 min (aligned to candle close) |
-| macro-refresh | Fetch macro data | Every 60 min |
-| sentiment-refresh | Fetch news | Every 30 min |
-| retraining | Check if weekly retraining due | Every 60 sec |
-| health | Flask HTTP health endpoint | Continuous |
+---
 
-> **Note**: The orchestrator and ML models depicted above are legacy (stopped since May 27, 2026).
-> The current live system is the D4 Paper Trader which uses a simplified direct path:
-> market cache -> features -> Donchian signal -> RiskManager -> PaperBroker.
-> See [TRUTH_MAP.md](system/TRUTH_MAP.md) for the actual runtime architecture.
+## Database Schema
+
+**`paper_trading.sqlite3`**:
+- `trades` — Completed trades with entry/exit times, prices, R-multiple, fees
+- `account_snapshots` — Equity, balance, peak equity (every ~15 min)
+- `open_positions` — Current open positions (survives restart)
+- `missed_signals` — Rejected signals with reason
+- `settings` — Key-value store (last_processed_ts)
+
+**`forward_shadow_market_cache.sqlite3`**:
+- `ohlcv_M15` — M15 candles from OANDA (~236K rows)
+- Additional tables for macro, COT, news (populated but unused by D4)

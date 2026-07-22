@@ -1,6 +1,6 @@
 # AURUM-1
 
-> My public quantitative research laboratory.
+> A place where I experiment with ideas and learn how quantitative systems are built.
 
 I'm a Computer Science and Electronics student who became obsessed with a simple question:
 
@@ -21,7 +21,7 @@ The goal is to build a system capable of honestly discovering one.
 Today AURUM is:
 
 - An autonomous paper trading system running on a cloud server
-- A quantitative research platform with 265 tests
+- A research system with 265 tests
 - A software engineering project I've rebuilt more times than I can count
 - A personal learning laboratory
 - A public journal of my growth as an engineer and researcher
@@ -210,6 +210,8 @@ monitor/      Dashboard, metrics, trade quality, prop firm sim, watchdog
 deploy/       Systemd service definitions
 docs/         Documentation
 tests/        265 tests
+research/     Strategy variants — D1 through D7 documented
+mistakes/     Lessons learned from bugs and wrong assumptions
 archive/      Dead code preserved for reference
 ```
 
