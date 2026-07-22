@@ -135,11 +135,27 @@ def trial_count() -> int:
         conn.close()
 
 
-def delete_trial(variant_id: str) -> None:
-    """Remove a trial by variant_id (for correcting errors)."""
+def delete_trial(trial_id: int | None = None, *, variant_id: str | None = None) -> None:
+    """Remove a trial by its autoincrement id (preferred) or variant_id.
+
+    Parameters
+    ----------
+    trial_id : int, optional
+        Delete a single trial by its autoincrement id. Use this variant to
+        remove one specific entry without affecting other runs of the same
+        variant_id.
+    variant_id : str, optional
+        Delete ALL rows with this variant_id. Use this to wipe an entire
+        variant's history when correcting a systematic error.
+
+    At least one of trial_id or variant_id must be provided.
+    """
     conn = _init_db()
     try:
-        conn.execute("DELETE FROM trials WHERE variant_id = ?", (variant_id,))
+        if trial_id is not None:
+            conn.execute("DELETE FROM trials WHERE id = ?", (trial_id,))
+        elif variant_id is not None:
+            conn.execute("DELETE FROM trials WHERE variant_id = ?", (variant_id,))
         conn.commit()
     finally:
         conn.close()
