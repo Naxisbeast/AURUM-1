@@ -11,6 +11,7 @@ Corrects the Sharpe ratio for:
 2. Non-normality — skew and fat tails distort standard Sharpe significance tests
 
 Used by AURUM: `aurum1/research/deflated_sharpe.py` and `trial_ledger.py`
+See also: `docs/system/AUDIT_DECISIONS.md` for why this was implemented.
 
 **López de Prado, M. (2018).** *Advances in Financial Machine Learning.* Wiley.
 

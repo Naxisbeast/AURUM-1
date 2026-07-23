@@ -1,6 +1,6 @@
 # AURUM-1
 
-> A place where I experiment with ideas and learn how quantitative systems are built.
+> A public quantitative systems research journal.
 
 I'm a Computer Science and Electronics student who became obsessed with a simple question:
 
