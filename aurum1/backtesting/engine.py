@@ -19,10 +19,10 @@ import pandas as pd
 from aurum1.execution import ExecutionEngine, PaperBroker
 from aurum1.features.engineer import FeatureEngineer, WARMUP_BARS
 from aurum1.instruments import InstrumentSpec
-from aurum1.models.ensemble import SignalResult
-from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
+from aurum1.signals._legacy_compat import REGIME_LABELS, RegimeClassifierStub as RegimeClassifier, SignalResult
 from aurum1.risk import RiskManager, RiskOrder
-from aurum1.signals import CandleRow, MachineMode, StateMachine, TradeInstruction
+from aurum1.signals import CandleRow, MachineMode, TradeInstruction
+from aurum1.signals.state_machine import StateMachine  # legacy — used by backtest engine
 
 
 @dataclass

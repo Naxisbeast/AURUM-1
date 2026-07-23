@@ -14,8 +14,6 @@ import pandas as pd
 
 from aurum1.backtesting.engine import BacktestEngine, BacktestResult
 from aurum1.features.engineer import FeatureEngineer
-from aurum1.models.direction_predictor import DirectionPredictor
-from aurum1.models.regime_classifier import RegimeClassifier
 from aurum1.signals import MachineMode
 
 

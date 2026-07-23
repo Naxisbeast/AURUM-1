@@ -104,3 +104,4 @@ handover/
 docs/system/RESTRUCTURE_PLAN.md
 plans/
 tests/_test_trial_ledger.sqlite3
+archive/aurum1/models.lnk

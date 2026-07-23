@@ -1,10 +1,20 @@
-"""Signal-state-machine shared types for AURUM-1."""
+"""Core signal types for AURUM-1.
+
+CandleRow and TradeInstruction are the shared types used by the live
+trading pipeline, risk manager, and broker. MachineMode and MachineState
+are retained for backtest compatibility.
+
+The original pullback-breakout StateMachine has been archived — see
+archive/aurum1/phase_s4_shadow_decision_candidate_lock.py and related.
+"""
 
 from enum import Enum
 
+from aurum1.signals._legacy_compat import CandleRow, TradeInstruction
+
 
 class MachineMode(Enum):
-    """Operating modes used by Phase 4 state machine and validation ablations."""
+    """Operating modes used by validation ablations."""
 
     RULE_ONLY = "rule_only"
     RULE_REGIME = "rule_regime"
@@ -13,7 +23,7 @@ class MachineMode(Enum):
 
 
 class MachineState(Enum):
-    """State-machine phases for the pullback-breakout entry workflow."""
+    """State-machine phases (retained for backtest compatibility)."""
 
     SCANNING = "SCANNING"
     ARMED = "ARMED"
@@ -21,7 +31,4 @@ class MachineState(Enum):
     BLACKOUT = "BLACKOUT"
 
 
-from aurum1.signals.state_machine import CandleRow, StateMachine, TradeInstruction
-
-
-__all__ = ["CandleRow", "MachineMode", "MachineState", "StateMachine", "TradeInstruction"]
+__all__ = ["CandleRow", "MachineMode", "MachineState", "TradeInstruction"]

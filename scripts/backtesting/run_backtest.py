@@ -36,7 +36,7 @@ from aurum1.data.ingestion import (
     load_settings,
 )
 from aurum1.features.engineer import FeatureEngineer
-from aurum1.models.regime_classifier import REGIME_LABELS, RegimeClassifier
+from aurum1.signals._legacy_compat import REGIME_LABELS
 from aurum1.signals import MachineMode
 
 MIN_BACKTEST_HISTORY_BARS = 20000
