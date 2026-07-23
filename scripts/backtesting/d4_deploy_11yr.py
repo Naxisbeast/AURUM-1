@@ -105,7 +105,7 @@ def main():
     print(f"  PF: {d4s['pf']:.4f} over {d4s['trades']} trades (11 years)")
 
     # Save results
-    out_path = Path('/opt/aurum1/reports/forward_shadow/d4_11yr_results.json')
+    out_path = ROOT / 'reports' / 'forward_shadow' / 'd4_11yr_results.json'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({
         "variant": "D4 BUY+SELL 2R",
