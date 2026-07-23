@@ -25,7 +25,8 @@ if str(ROOT) not in sys.path:
 
 from aurum1.backtesting.engine import BacktestEngine, _candle_from_row
 from aurum1.data.ingestion import load_cot, load_macro, load_ohlcv, load_settings
-from aurum1.signals import MachineMode, StateMachine
+from aurum1.signals import MachineMode
+from aurum1.signals.state_machine import StateMachine  # legacy
 
 
 DEFAULT_OUTPUT_DIR = ROOT / "reports" / "research"

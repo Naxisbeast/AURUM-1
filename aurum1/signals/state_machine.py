@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from aurum1.models.ensemble import SignalResult
+from aurum1.signals._legacy_compat import SignalResult
 from aurum1.signals import MachineMode, MachineState
 
 

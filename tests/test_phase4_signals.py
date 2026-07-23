@@ -4,8 +4,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aurum1.models.ensemble import SignalResult
-from aurum1.signals import CandleRow, MachineMode, MachineState, StateMachine, TradeInstruction
+from aurum1.signals._legacy_compat import SignalResult
+from aurum1.signals import CandleRow, MachineMode, MachineState, TradeInstruction
+from aurum1.signals.state_machine import StateMachine  # legacy
 
 
 def make_candle(
