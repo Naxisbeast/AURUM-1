@@ -142,7 +142,7 @@ def main():
         print(f"    PF: {bs2r.get('pf', 0):.4f} {pf_ok}")
         print(f"    Trades: {bs2r.get('trades', 0)} (statistically robust)")
 
-    out = Path('/opt/aurum1/reports/forward_shadow/full_backtest_results.json')
+    out = ROOT / 'reports' / 'forward_shadow' / 'full_backtest_results.json'
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"candles": len(ohlcv), "date_range": {"start": str(ohlcv.index[0].date()), "end": str(ohlcv.index[-1].date())}, "results": {k: v for k, v in all_metrics.items()}}, indent=2, default=str))
     print(f"\nFull results saved to {out}")

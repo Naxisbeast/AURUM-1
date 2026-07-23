@@ -4,8 +4,8 @@ CandleRow and TradeInstruction are the shared types used by the live
 trading pipeline, risk manager, and broker. MachineMode and MachineState
 are retained for backtest compatibility.
 
-The original pullback-breakout StateMachine has been archived — see
-archive/aurum1/phase_s4_shadow_decision_candidate_lock.py and related.
+StateMachine (in state_machine.py) is legacy — no longer used by D4
+but still imported by backtesting/engine.py for the old backtest path.
 """
 
 from enum import Enum

@@ -1,50 +1,20 @@
-"""Phase 4 signal state machine for AURUM-1.
+"""Phase 4 signal state machine for AURUM-1 (legacy — not used by D4).
 
 The state machine consumes already-computed candle features and upstream model
 signals. It does not call FeatureEngineer or any model directly.
+
+CandleRow and TradeInstruction are defined in _legacy_compat.py; this module
+imports them rather than duplicating them.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from aurum1.signals._legacy_compat import SignalResult
+from aurum1.signals._legacy_compat import CandleRow, SignalResult, TradeInstruction
 from aurum1.signals import MachineMode, MachineState
-
-
-@dataclass(frozen=True)
-class CandleRow:
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    atr_14: float
-    adx_14: float
-    ema_9: float
-    ema_20: float
-    session_london: int
-    session_ny: int
-    session_overlap: int
-
-
-@dataclass(frozen=True)
-class TradeInstruction:
-    timestamp: datetime
-    direction: str
-    entry_price: float
-    stop_loss: float
-    take_profit: float
-    atr_at_entry: float
-    signal_score: float
-    regime: str
-    confidence: float
-    machine_mode: str
-    state_machine_version: str = "1.0"
 
 
 class StateMachine:
