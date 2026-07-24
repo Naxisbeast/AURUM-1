@@ -63,7 +63,7 @@ D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the stronges
 | Live paper trades | 29 trades and counting |
 
 [Full status →](docs/STATUS.md)
-[Live dashboard →](https://wear-boot-jennifer-brush.trycloudflare.com)
+[Live dashboard →](https://motivation-blue-logo-vacancies.trycloudflare.com)
 [The full story →](docs/JOURNEY.md)
 
 ---
