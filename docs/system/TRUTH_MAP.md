@@ -61,7 +61,7 @@ graph TD
     D4 --> DB[paper_trading.sqlite3]
 
     DB -->|reads| DASH[Streamlit Dashboard<br/>aurum1-dashboard.service<br/>port 80 via nginx]
-    DASH --> URL[https://wear-boot-jennifer-brush.trycloudflare.com]
+    DASH --> URL[https://motivation-blue-logo-vacancies.trycloudflare.com]
 
     style FS fill:#16213e,color:#fff
     style OANDA fill:#e94560,color:#fff
