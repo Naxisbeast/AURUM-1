@@ -1,5 +1,10 @@
 # AURUM-1
 
+[![Tests](https://github.com/Naxisbeast/AURUM-1/actions/workflows/test.yml/badge.svg)](https://github.com/Naxisbeast/AURUM-1/actions/workflows/test.yml)
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![Dashboard](https://img.shields.io/badge/Dashboard-Live-green.svg)](https://dashboard.auram.software)
+[![License](https://img.shields.io/badge/License-Private-red.svg)]()
+
 > A public quantitative systems research journal.
 
 I'm a Computer Science and Electronics student who became obsessed with a simple question:
@@ -221,6 +226,20 @@ archive/      Dead code preserved for reference
 
 ---
 
+## Development Workflow
+
+All work is tracked through GitHub Issues and grouped into Milestones. Non-trivial changes happen on **feature branches** and merge back to `main` via **pull requests** — nothing lands directly on main.
+
+**How a change happens:**
+1. An **Issue** describes what needs to change and why
+2. Work happens on a **branch** (`feat/...` or `fix/...`)
+3. A **Pull Request** merges the branch back to main, with a description and `Closes #N` reference
+4. CI runs the test suite on every push
+
+This keeps `main` stable and gives every change a reviewable record. See [GITHUB_WORKFLOW.md](docs/GITHUB_WORKFLOW.md) for the full convention.
+
+---
+
 ## Read More
 
 | Document | What's Inside |
@@ -230,6 +249,7 @@ archive/      Dead code preserved for reference
 | [TRUTH_MAP.md](docs/system/TRUTH_MAP.md) | Forensic map of the entire system |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design and component interaction |
 | [AUDIT_ROADMAP.md](docs/system/AUDIT_ROADMAP.md) | What's next for audit readiness |
+| [GITHUB_WORKFLOW.md](docs/GITHUB_WORKFLOW.md) | Issues, milestones, branches, and PR convention |
 
 ---
 
