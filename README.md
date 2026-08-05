@@ -60,10 +60,14 @@ D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the stronges
 | Monte Carlo (10,000 simulations) | 0% ruin probability |
 | TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
 | Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
-| Live paper trades | 29 trades and counting |
+| Live paper trades | **72 trades**, +$708.70 net, equity $10,863 (+8.6%) |
+| Live win rate | ~50% (6 of last 8 at +2R take profit) |
+| Live avg R | +0.53 |
+| Max drawdown (lifetime) | ~2.5% (vs 15% risk gate threshold) |
+| 50-trade risk review gate | ✅ PASSED (4/4 criteria) |
 
 [Full status →](docs/STATUS.md)
-[Live dashboard →](https://motivation-blue-logo-vacancies.trycloudflare.com)
+[Live dashboard →](https://dashboard.auram.software)
 [The full story →](docs/JOURNEY.md)
 
 ---

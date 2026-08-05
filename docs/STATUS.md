@@ -93,27 +93,35 @@ Total:             265 tests, all passing
 
 ## Pending Actions
 
-1. 🔲 Accumulate 50+ trades at 0.35%
+1. ✅ **Reached 72 trades** (50-trade risk review gate PASSED — see below)
 2. 🔲 Accumulate 100+ trades at 0.35%
 
 ## Pre-Registered Gate Criteria
 
 These criteria are written *before* the trade counts are reached, to prevent moving the goalposts when the results are in.
 
-### 50-Trade Risk Review Gate (target: ~mid-August)
+### 50-Trade Risk Review Gate — ✅ PASSED (2026-08-05)
 
 The question: should risk increase from 0.35% to 0.50%?
 
-| Criterion | Pass | Fail |
-|-----------|------|------|
-| Maximum drawdown stays ≤15% | ✅ Proceed to 0.50% review | ❌ Stay at 0.35%, re-evaluate at 100 trades |
-| Daily loss kill switch never triggers | ✅ Proceed | ❌ Investigate root cause before any risk increase |
-| Win rate stays above 30% (not breakeven) | ✅ Proceed | ❌ Stay at 0.35% |
-| No execution infrastructure failures | ✅ Proceed | ❌ Fix before any risk increase |
+**Result at 72 trades: 4/4 criteria PASSED**
 
-**If 3+ criteria fail**: demote D4 to shadow-only, investigate whether the 11-year backtest is no longer representative.
+| Criterion | Result | Verdict |
+|-----------|--------|---------|
+| Maximum drawdown stays ≤15% | 0.58% current max | ✅ PASS |
+| Daily loss kill switch never triggers | Never triggered | ✅ PASS |
+| Win rate stays above 30% | 50%+ win rate | ✅ PASS |
+| No execution infrastructure failures | No failures | ✅ PASS |
 
-### 100-Trade Strategy Review Gate (target: ~late September)
+**Decision: D4 remains at 0.35% risk for now.** The strategy is performing well — 72 trades, +$708.70 net, equity $10,863 (+8.6% from $10k start). But 72 trades is still modest for the *next* risk increase to 0.50%. The pre-registered criteria allow proceeding to a 0.50% review, but the safer path is to let the 100-trade gate provide more statistical confidence first. The next decision point remains the 100-trade strategy review.
+
+**Key observations at 72 trades:**
+- BUY and SELL equally balanced (36 each) — healthy
+- 6 of the last 8 trades hit take profit at +2R (winning streak)
+- Avg R +0.53 (consistent with backtest expectations)
+- Max drawdown never exceeded ~2.5% lifetime (vs 15% gate threshold)
+
+### 100-Trade Strategy Review Gate (target: ~September)
 
 The question: is D4's live performance consistent with the 11-year backtest?
 
