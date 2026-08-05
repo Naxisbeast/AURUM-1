@@ -273,15 +273,39 @@ The goal isn't to find a profitable strategy. The goal is to build a system capa
 
 ---
 
+### Chapter Nine — The 50-Trade Gate (August 2026)
+
+By early August, D4 had crossed **72 trades** — past the first pre-registered risk review gate.
+
+The gate was written in advance, before the results were in, specifically so I couldn't move the goalposts. The four criteria:
+
+| Criterion | Threshold | Result |
+|-----------|-----------|--------|
+| Max drawdown | ≤15% | ~2.5% lifetime — ✅ |
+| Daily kill switch | Never triggers | Never triggered — ✅ |
+| Win rate | >30% | ~50% — ✅ |
+| Infrastructure failures | None | None — ✅ |
+
+All four passed. Equity was $10,863, up 8.6% from the $10k start, with +$708 net. BUY and SELL were perfectly balanced at 36 trades each. Six of the last eight trades had hit take profit at +2R.
+
+The honest reading of the gate is that passing *allows* a review of 0.50% risk — it doesn't require it. I decided to keep D4 at 0.35%. Seventy-two trades is real progress, but it's still modest for betting more capital on the strategy. The 100-trade gate, with the Deflated Sharpe Ratio check, is where the statistical confidence should come from.
+
+### The Permanent Dashboard
+
+There was also an infrastructure headache worth remembering. For weeks, the dashboard lived behind a Cloudflare quick tunnel — the kind that generates a random URL (`wear-boot-jennifer-brush.trycloudflare.com`, then `motivation-blue-logo-vacancies.trycloudflare.com`) that changes every time the tunnel restarts. Twice the URL just died and I had to dig the new one out of the logs.
+
+So I bought a real domain — `auram.software` — and set up a proper named tunnel. The process was fiddlier than it should have been: the nameservers Cloudflare assigned changed between the initial setup and activation, DNSSEC had to be turned off at the registrar, and the systemd service kept failing because I had the `--token` flag in the wrong position relative to `run`. The error was subtle — cloudflared printed its help text and exited with status 0, which looks like success but isn't.
+
+But once it worked, the dashboard stopped being a moving target. It's now a permanent, HTTPS, stable URL that doesn't care how many times the tunnel restarts.
+
 ### What Comes Next
 
 D4 isn't finished. Over the coming months:
 
-- Reach 50 trades for the first risk review gate
-- Reach 100 trades for the strategy review gate
+- Reach 100 trades for the strategy review gate (with the Deflated Sharpe Ratio check)
+- Consider a 0.50% risk review once there's more statistical confidence
 - Expand the analytics pipeline
 - Improve execution monitoring
-- Stress test larger risk profiles
 - Determine whether D4 deserves real capital
 
 Eventually D4 may die. If it does, that's acceptable — it means I found something better, or the data told me the edge wasn't real.
