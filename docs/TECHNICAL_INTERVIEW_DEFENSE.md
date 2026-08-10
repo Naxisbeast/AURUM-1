@@ -359,3 +359,173 @@ architecture, not that you generated it. Be ready to:
 | `research/trial_ledger.py` | Logs every backtest trial | Feeds Deflated Sharpe Ratio |
 | `research/deflated_sharpe.py` | Selection-bias correction | Validates edge is real, not luck |
 | `scripts/audit/*.py` | Capacity, determinism, decay | Proves the system is trustworthy |
+
+---
+
+## 11. CI/CD and Deployment Pipeline
+
+### What CI/CD exists
+
+```
+[push/PR to main] → [GitHub Actions] → [9 test groups, 265 tests] → [pass/fail badge on README]
+```
+
+**The pipeline**: `.github/workflows/test.yml` runs on every push to main and
+every pull request. It:
+1. Sets up Python 3.12
+2. Installs dependencies from `requirements.txt`
+3. Runs 9 groups of tests in parallel (core, D4 regression, trade quality,
+   prop firm, evidence, execution, metrics, forward shadow, watchdog)
+
+**Why CI matters here**: A trading system has a hard correctness requirement.
+CI catches a broken import or a risk-logic regression the moment it's committed,
+before it can affect the live system. The 27 `parents[2]` path bugs I fixed would
+have been caught immediately if I'd had full CI from the start.
+
+**Deployment**:
+- Code is pushed to GitHub → **manual deploy** to the server via SSH (the system
+  isn't auto-deployed; a human reviews and pushes)
+- The server runs 5 systemd services that pick up the new code on restart
+- **Why not full CD (auto-deploy)?** A trading system should not auto-deploy
+  without review. A bad auto-deploy could stop trading or, worse, trade wrong.
+  Manual deploy is a deliberate safety choice.
+
+**Security in the pipeline**:
+- **Secret scanning**: GitHub-native, catches credentials in commits
+- **Dependabot**: auto-detects vulnerable dependencies, opens PRs
+- **SBOM**: GitHub auto-generates a software bill of materials
+- **Pre-commit hook**: blocks `.env` files and credential patterns locally
+
+---
+
+## 12. Future Improvements (and why)
+
+An interviewer will ask "what would you do next?" — here's the honest answer
+that shows forward thinking without overpromising.
+
+### Immediate (evidence collection)
+- **Let D4 reach 100 trades** — the pre-registered strategy review gate, where
+  the Deflated Sharpe Ratio gets computed for real
+- **Build the 100-trade gate tooling now** — wire the DSR check to run
+  automatically when the gate hits
+
+### Near-term (engineering)
+- **Integration tests with a fake OANDA server** — test the full data pipeline
+  and broker interactions without hitting the real API. This is the biggest
+  testing gap.
+- **Deterministic RNG throughout** — already verified the backtest is
+  deterministic; would formalize it as a CI check.
+
+### Medium-term (architecture)
+- **Second uncorrelated strategy** — the highest-value research direction.
+  Diversify return streams rather than optimizing D4 further (which we proved
+  fails).
+- **PostgreSQL migration** — only if the system grows beyond single-writer
+  SQLite limits. Not justified today.
+- **Proper event-driven pipeline** — if I wanted sub-second reaction, I'd need
+  to move off 60s polling. Not justified for M15 trading.
+
+### Long-term (the FPGA/C++ direction)
+- **Migrate core algorithmic layers to bare-metal C++ and FPGA (SystemVerilog)**
+  to study bypassing OS/kernel scheduling latency. This is a research goal, not
+  a production need — it's about learning systems-level engineering.
+
+**Why "what would you do differently" is your strongest answer**: It shows you
+own the decisions, not just the code. E.g. "I'd build the trial ledger from day
+one, and I'd add integration tests earlier — both would have saved debugging
+time."
+
+---
+
+## 13. Industry-Style Interview Q&A (with model answers)
+
+These are the questions an interviewer would actually ask, with the answers
+you should give. Practice saying them out loud — your own words, not memorized.
+
+### Q1: Explain your architecture in 2 minutes.
+**A**: "AURUM is a paper-trading validation platform. It has three decoupled
+layers: a data pipeline that fetches gold price data and stores it in SQLite; a
+trading engine that reads that data, applies a Donchian breakout strategy,
+checks it through a risk manager, and executes through a simulated broker; and
+a monitoring layer that reads the results and displays them on a dashboard. The
+key decision was decoupling data from trading — so a data failure doesn't
+crash the trading loop, and the data can serve multiple strategies."
+
+### Q2: Why SQLite instead of a real database?
+**A**: "SQLite gives me ACID transactions and restart survival with zero
+operational overhead — no server, no connection pool, no auth. For a
+single-host system with one writer, it's the right tool. I accepted that it
+doesn't scale to multi-writer workloads, but that's a future problem. If AURUM
+grew to multiple servers, I'd migrate to PostgreSQL — and I can articulate that
+migration."
+
+### Q3: Your system is single-threaded. Isn't that a weakness?
+**A**: "It's deliberate. The trading loop is single-threaded because there's
+only ever one position (Donchian = sequential entries), and single-threaded
+code can't have race conditions around position state. The concurrency that
+exists is at the service level — five systemd services run in parallel and
+communicate only through SQLite, which avoids shared-memory races. I chose
+correctness over throughput, which is the right trade for a trading system."
+
+### Q4: Walk me through a production failure and how you fixed it.
+**A**: "The most interesting one was the Kelly double-cap bug. The system was
+sizing positions to near-zero despite the strategy having edge. Nothing crashed
+and no exception was raised — the two safety caps on the Kelly fraction
+multiplied against each other and silently canceled positions. It looked like
+caution, not a defect. I traced it by computing what the combined logic actually
+did to position sizes, found the double cap, removed one, and added a regression
+test. The lesson: redundant safety mechanisms can cancel each other out, and
+the only way to catch that is to compute real numbers."
+
+### Q5: How do you know your backtest results are trustworthy?
+**A**: "Five ways. First, walk-forward validation on 18 out-of-sample windows
+over 11 years — not one backtest. Second, Monte Carlo simulation shuffling trade
+outcomes 10,000 times to check ruin probability. Third, a stationarity test to
+confirm the signal isn't just noise. Fourth, a determinism audit — I ran the
+backtest twice and confirmed identical results, so there's no unseeded
+randomness. Fifth, a Deflated Sharpe Ratio that corrects for the fact that I
+tested multiple variants before picking the winner. Together those give me
+confidence the edge is real, not luck."
+
+### Q6: Why did you remove the machine learning?
+**A**: "Because the data said it added nothing. The ML ensemble variant had a
+profit factor of 1.14 — identical to the no-ML variant. The ML introduced
+fragile dependencies without any measurable improvement. Removing it was the
+right call because AURUM's philosophy is that complexity must justify its
+existence. I documented the failure in a mistakes/ folder and archived the code
+rather than deleting it — knowing why it failed is as valuable as knowing why
+D4 works."
+
+### Q7: How would you handle real (live) money?
+**A**: "I wouldn't yet. The system is in evidence collection at 0.35% risk with
+a pre-registered gate: at 100 trades, the Deflated Sharpe Ratio determines
+whether D4's edge survives selection-bias correction. Only if it clears that
+gate would I consider live capital, and even then I'd start with a micro lot
+under close monitoring. The discipline of pre-registering the decision before
+seeing the results prevents me from moving the goalposts when the number comes
+in."
+
+### Q8: What's the hardest engineering problem you solved?
+**A**: "Not writing the strategy — building validation infrastructure rigorous
+enough to catch my own mistakes. The clearest example was the slippage bug:
+the model allowed favorable slippage, which silently overstated backtest
+returns. Nothing crashed. The system just lied about performance. Catching a
+bug that makes you look better is harder than catching one that crashes,
+because it doesn't announce itself. That taught me that the most dangerous
+bugs are the ones that flatter you."
+
+---
+
+## Summary: The Interviewer's Verification Checklist
+
+When the interviewer probes whether you *personally* understand the system, they
+will check that you can:
+
+- [ ] Explain the architecture in 2 minutes without reading anything
+- [ ] Re-derive the Kelly / 2R / R-multiple math by hand
+- [ ] Walk through 2-3 real debugging stories end-to-end
+- [ ] Defend a trade-off from both sides (why X, and X's drawback)
+- [ ] Explain why you chose single-threaded + SQLite + polling
+- [ ] Describe CI/CD and why deployment is manual (safety)
+- [ ] Articulate future improvements and what you'd do differently
+- [ ] State honestly what's NOT yet proven (live edge, DSR at 100 trades)
