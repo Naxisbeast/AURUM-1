@@ -153,7 +153,7 @@ If no criterion in the four-question gate is satisfied, the change is rejected.
 | Gate | Status |
 |------|--------|
 | 50-trade risk review | ✅ PASSED (4/4 criteria, 2026-08-05) |
-| 100-trade strategy review | 🔲 Pending (~September) |
+| 100-trade strategy review | 🔲 Pending (~September) — tooling ready (`scripts/gates/`), trial ledger backfilled, criterion-2 units fixed (see `docs/STATUS.md`) |
 | Real capital deployment | 🔲 Not considered until 100-trade gate passes |
 
 The model remains in paper trading until the 100-trade gate provides

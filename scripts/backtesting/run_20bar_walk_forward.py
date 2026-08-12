@@ -141,3 +141,33 @@ out = ROOT / 'reports' / 'forward_shadow' / f'd4_walk_forward_L{LOOKBACK}_local_
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps({'windows': windows, 'summary': {'n': len(windows), 'positive': positive, 'negative': neg, 'mean_sharpe': float(np.mean(all_sharpes)), 'mean_pf': float(np.mean(all_pfs)), 'pos_window_rate': positive/len(windows) if windows else 0}, 'generated_at': datetime.now(UTC).isoformat()}, indent=2, default=str))
 print(f'\nSaved: {out}')
+
+# --- Auto-log to the trial ledger for DSR (Deflated Sharpe Ratio) ---
+# The ledger is the deflation pool for the 100-trade gate. The DSR needs
+# UNAANNUALIZED per-window Sharpe, but the loop above stores the ANNUALIZED
+# value (multiplied by sqrt(252)). All windows are equal length (test_bars),
+# so unannualized = annualized / sqrt(252) is an exact inverse.
+from scipy.stats import kurtosis, skew as _skew  # noqa: E402
+
+unann_sharpes = np.array([w['sharpe'] / math.sqrt(252) for w in windows])
+if unann_sharpes.size >= 3:
+    from aurum1.research.trial_ledger import TrialRecord, log_trial
+
+    variant_id = f'D4_walkforward_L{LOOKBACK}_local'
+    rec = TrialRecord(
+        variant_id=variant_id,
+        parent_family='donchian_breakout',
+        n_obs=len(windows),
+        sharpe=float(unann_sharpes.mean()),
+        skew=float(_skew(unann_sharpes)),
+        kurtosis=float(kurtosis(unann_sharpes, fisher=False)),
+        return_series_path=f'reports/forward_shadow/d4_walk_forward_L{LOOKBACK}_local_results.json',
+        notes=f'Donchian LOOKBACK={LOOKBACK}, 2R exit, BUY+SELL, no filters. '
+              f'{len(windows)} non-overlapping windows on local backtest cache. '
+              'Unannualized per-window Sharpe (annualized/sqrt(252)). Auto-logged by runner.',
+    )
+    log_trial(rec)
+    print(f'Trial ledger: logged {variant_id} (n_obs={rec.n_obs}, '
+          f'sharpe={rec.sharpe:.4f})')
+else:
+    print(f'Trial ledger: skipping {LOOKBACK}-bar run ({len(windows)} windows < 3)')
