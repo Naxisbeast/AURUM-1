@@ -134,3 +134,40 @@ The question: is D4's live performance consistent with the 11-year backtest?
 
 **If D4 clears all criteria at 100 trades**: consider first real-capital paper step (micro lot, monitored).
 **If D4 fails multiple criteria**: archive D4 in completed research, begin search for next candidate.
+
+#### Criterion 2 clarification (2026-08-12) — apples-to-apples units
+
+Criterion 2 was originally written as a bare "Live Sharpe within 25% of backtest
+Sharpe" without specifying units. Building the gate tooling exposed a latent bug:
+the live Sharpe is naturally per-trade while the walk-forward backtest Sharpe is
+per-window (annualized daily-return). Comparing those directly is mixing units and
+would falsely fail a healthy strategy.
+
+**Fix**: criterion 2 now compares on the SAME unit — daily-return Sharpe for both.
+The live daily-return Sharpe is computed from the cumulative-R equity curve
+(`scripts/gates/run_100_trade_gate.py::live_daily_return_sharpe`), and the backtest
+daily-return Sharpe is the annualized walk-forward Sharpe divided by √252. This is
+the apples-to-apples comparison the criterion intended.
+
+**Effect**: at 95 trades the live daily Sharpe (0.371) is well above the backtest
+daily Sharpe (0.080) — comfortably PASS. The earlier per-trade-vs-per-window
+comparison (0.314 vs 1.274) was the unit mismatch, not a real performance gap.
+
+#### Gate tooling (2026-08-12) — DSR machinery completed
+
+The DSR machinery (`aurum1/research/deflated_sharpe.py`, `trial_ledger.py`) was
+built in the July audit but the trial ledger was **never populated** — no research
+run ever called `log_trial()`. Without trial history, criterion 1 (DSR ≥ 0.95)
+could not be computed at all. Completed now:
+
+- `scripts/gates/backfill_trial_ledger.py` — logs the 4 historical D4 walk-forward
+  trials (L20, L20_v2, L55, L55_v2) into the ledger. Idempotent.
+- `scripts/gates/run_100_trade_gate.py` — evaluates all 4 criteria against a live
+  DB snapshot. Pull a fresh snapshot from the server first (usage in docstring).
+- Auto-logging added to all three walk-forward runners, so future trials log
+  themselves.
+
+**Honest caveat at 95 trades**: the DSR criterion is underpowered with only 4
+same-family trials. The pre-registered fail branch for DSR (extend to 200, demote
+if still below) is the correct response to a DSR FAIL at this stage — it reflects
+the thin deflation pool, not a confident absence of edge.

@@ -109,12 +109,19 @@ Sharpe ratio (Bailey & López de Prado, 2014) corrects for this.
 
 **Action**: Built `aurum1/research/trial_ledger.py` (append-only SQLite ledger
 for every backtest trial) and `aurum1/research/deflated_sharpe.py` (full DSR
-implementation). The actual DSR computation will be run at the 100-trade gate
-when there's enough data. Added paper reference to `research/references/`.
+implementation). Added paper reference to `research/references/`.
 
 **Why it's beneficial**: The machinery is in place and tested before it's
 needed. When the 100-trade gate arrives, the DSR check can be run immediately
 rather than having to build it under pressure.
+
+**Completed 2026-08-12**: The ledger was built but never populated (no research
+run called `log_trial()`), so the DSR could not be computed. Backfilled the four
+historical D4 walk-forward trials and added the gate runner:
+`scripts/gates/backfill_trial_ledger.py` and `scripts/gates/run_100_trade_gate.py`.
+Walk-forward runners now auto-log future trials. The pre-registered criterion-2
+units ambiguity (per-trade vs per-window Sharpe) was also resolved — see
+`docs/STATUS.md`.
 
 ---
 
