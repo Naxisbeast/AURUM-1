@@ -1,12 +1,12 @@
 # AURUM-1 System Status
 
-**Last updated**: 2026-07-18
+**Last updated**: 2026-08-16
 
 ## Operational Status
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.25% (0.35% pending deploy)** |
+| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35%** — 104 trades, 100-trade gate run |
 | Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — 236K+ M15 candles cached. |
 | Dashboard | ✅ **ACTIVE** | Streamlit via Cloudflare tunnel |
 | D1-D7 Shadow Journals | 🟡 **VARIOUS** | D4 shadow runs on timer; D2-D7 are research-only |
@@ -20,8 +20,8 @@
 | **0: Truth Map** | ✅ Complete | Forensic scan: dead code, broken imports, test gaps, risk decisions. See `docs/system/TRUTH_MAP.md` |
 | **1: Stabilization** | ✅ Complete | 6 import fixes, 8 `__init__.py` added, dead code archived, silent `except:pass` fixed, 9 deploy templates updated, 8 backtesting ROOT paths fixed, 5 new tests |
 | **2: Validation** | ✅ Complete | Walk-forward (88.9% positive), Monte Carlo (0% ruin), TC stress (survives 6p+2p), risk sensitivity, ICIR decay — all confirmed no regression |
-| **Risk Bump (0.25% → 0.35%)** | ⏳ **PENDING** | Code ready. Deploy + restart scheduled Sunday 20:00 UTC |
-| **3: Analytics** | ⬜ Not started | Trade quality scoring, prop firm sim, system health dashboard |
+| **Risk Bump (0.25% → 0.35%)** | ✅ Done | Live risk is 0.35% per trade (confirmed in settings.yaml `risk_per_trade_pct: 0.0035`) |
+| **3: Analytics** | ✅ Complete | Trade quality scoring (MAE/MFE), prop firm simulator, system health dashboard — see `monitor/prop_firm_simulator.py`, `scripts/dash/run_dashboard.py`, `scripts/research/analyze_mfe_mae.py` |
 | **4: Evidence Collection** | ✅ 104 trades reached (2026-08-16) | 100-trade gate RUN — 2/3 automated criteria passed; continue to 200 for DSR |
 
 ## D4 Paper Trader Performance 🏆

@@ -23,7 +23,7 @@ Issues are grouped into milestones that represent phases of work:
 
 | Milestone | Goal | Due |
 |-----------|------|-----|
-| **Evidence Collection** | Accumulate 100+ trades at 0.35% risk to reach the strategy review gate | Sep 30 |
+| **Evidence Collection** | Accumulate 100+ trades at 0.35% risk to reach the strategy review gate | ✅ 104 trades reached 2026-08-16; gate run, 2/3 automated criteria passed |
 | **Audit Readiness** | Address professor feedback: dependency scanning, SBOM, containerization decisions, workflow improvements | Sep 15 |
 
 A milestone is *done* when every issue in it is closed. Closing an issue means the work is merged, verified, and the reasoning documented.

@@ -90,7 +90,7 @@ The 2R asymmetric payout turns a ~37% win rate into a profitable expectancy.
 | TC stress | Spread/slippage at 4x normal | PF stays > 1.05 |
 | Stationarity | ADF test on signal components | Signal is stationary (not noise) |
 | Determinism | Backtest run twice, identical inputs | Fully deterministic |
-| Deflated Sharpe | Corrects for selection bias (D1-D7) | To be computed at 100-trade gate |
+| Deflated Sharpe | Corrects for selection bias (D1-D7) | Computed at 100-trade gate (2026-08-16) — 0.274, underpowered with 4 trials; reassess ~200 trades |
 | Live signal decay | Live vs backtest ICIR profile | Healthy, no regime shift |
 
 ---
@@ -117,8 +117,10 @@ parameters were chosen from systematic comparison (D1-D7), not curve-fitting.
    backtest period. Some of D4's edge reflects the secular uptrend, not pure
    market timing. Buy-and-hold comparison documented in research/promoted/d4.
 
-2. **Live evidence is early**: 72 trades is not enough for statistical
-   significance. The 100-trade gate with DSR is the real test.
+2. **Live evidence is still limited**: The 100-trade gate was run at 104 trades
+   (2026-08-16) — 2/3 automated criteria passed (Sharpe, PF). The DSR criterion
+   could not be meaningfully assessed with only 4 same-family trials in the pool;
+   it becomes statistically meaningful near 200 trades. See `docs/STATUS.md`.
 
 3. **Paper trading ≠ live capital**: Real slippage, requotes, broker latency,
    and psychological pressure are absent in paper mode.
@@ -153,8 +155,9 @@ If no criterion in the four-question gate is satisfied, the change is rejected.
 | Gate | Status |
 |------|--------|
 | 50-trade risk review | ✅ PASSED (4/4 criteria, 2026-08-05) |
-| 100-trade strategy review | 🔲 Pending (~September) — tooling ready (`scripts/gates/`), trial ledger backfilled, criterion-2 units fixed (see `docs/STATUS.md`) |
-| Real capital deployment | 🔲 Not considered until 100-trade gate passes |
+| 100-trade strategy review | ✅ RUN (2026-08-16) — 2/3 automated criteria passed (Sharpe, PF); DSR underpowered, reassess ~200 trades |
+| Real capital deployment | 🔲 Not considered until DSR clears |
 
-The model remains in paper trading until the 100-trade gate provides
-sufficient statistical confidence.
+The model remains in paper trading. The 100-trade gate confirmed the live edge
+(Sharpe, PF) but DSR needs ~200 trades for statistical confidence before any
+real-capital consideration.

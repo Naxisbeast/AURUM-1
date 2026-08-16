@@ -616,11 +616,11 @@ All phases of AURUM Hardening v1.0 are complete:
 | 1: Stabilization | ✅ | 27 `parents[1]`→`parents[2]` fixes, 8 `__init__.py` files, dead code archived, silent errors fixed, 9 deploy templates updated |
 | 2: Validation | ✅ | Walk-forward (88.9% positive), Monte Carlo (0% ruin), TC stress (survives 6p+2p), risk sensitivity, ICIR decay — all confirmed no regression |
 | 3: Analytics | ✅ | Trade quality scoring, prop firm simulator, health dashboard, experiment framework |
-| 4: Evidence Collection | ✅ | Progress tracker built, server monitoring at 0.35% risk, 29 trades accumulated |
+| 4: Evidence Collection | ✅ | Server monitoring at 0.35% risk; 104 trades accumulated (2026-08-16) |
 
 ### Gates Ahead
-- **50 trades** (~21 remaining, ~12 days projected): Risk review — consider 0.50%?
-- **100 trades** (~71 remaining, ~40 days projected): Strategy review — evaluate D4 vs backtest expectations
+- **50 trades**: ✅ PASSED (4/4 criteria, 2026-08-05)
+- **100 trades**: ✅ RUN (2026-08-16) — 2/3 automated criteria passed; continue to 200 for DSR
 
 ### Final Repo Stats
 - **265 tests passing** (up from ~80 pre-hardening)
