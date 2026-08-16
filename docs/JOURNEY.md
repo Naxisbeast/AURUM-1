@@ -300,10 +300,12 @@ But once it worked, the dashboard stopped being a moving target. It's now a perm
 
 ### What Comes Next
 
-D4 isn't finished. Over the coming months:
+D4 isn't finished. The 100-trade gate ran in August (104 trades) — 2/3 automated
+criteria passed, confirming the edge live, but the Deflated Sharpe Ratio needs
+~200 trades before it's statistically meaningful. Over the coming months:
 
-- Reach 100 trades for the strategy review gate (with the Deflated Sharpe Ratio check)
-- Consider a 0.50% risk review once there's more statistical confidence
+- Continue collecting toward 200 trades so the DSR can be meaningfully assessed
+- Re-assess the 0.50% risk step once DSR clears (pre-registered)
 - Expand the analytics pipeline
 - Improve execution monitoring
 - Determine whether D4 deserves real capital

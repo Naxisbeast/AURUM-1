@@ -103,7 +103,7 @@ stop_loss   = entry_price ∓ 2 × ATR
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| Risk per trade | **0.25%** of equity | Risk sensitivity: median DD 11.9%, 99th DD 20.3%, 1.2% chance >20% DD |
+| Risk per trade | **0.35%** of equity (bumped from 0.25% after 50-trade gate, 2026-08-05) | Risk sensitivity: median DD 11.9%, 99th DD 20.3%, 1.2% chance >20% DD |
 | Kelly fraction | 0.25 | Ensures conservative sizing |
 | Fixed 2R exit | TP=+2R, SL=-1R | Backtested across 8,175 trades |
 | Maximum positions | 1 | Donchian breakout — sequential entries only |
