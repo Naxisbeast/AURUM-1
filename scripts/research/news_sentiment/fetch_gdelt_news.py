@@ -162,7 +162,7 @@ def _chunk_days(start: datetime, end: datetime, chunk_days: int) -> list[tuple[d
     return chunks
 
 
-def _write_db(path: Path, rows: list[dict]) -> None:
+def _init_db(path: Path) -> None:
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
@@ -174,19 +174,41 @@ def _write_db(path: Path, rows: list[dict]) -> None:
             )
             """
         )
-        if rows:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO news_headlines
-                (published_at, title, url, source, summary, overall_sentiment_score, relevance_score)
-                VALUES (:published_at, :title, :url, :source, :summary,
-                        :overall_sentiment_score, :relevance_score)
-                """,
-                rows,
-            )
         conn.commit()
     finally:
         conn.close()
+
+
+def _append_rows(path: Path, rows: list[dict]) -> None:
+    """Insert rows incrementally (resume-safe; INSERT OR REPLACE dedups)."""
+    if not rows:
+        return
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO news_headlines
+            (published_at, title, url, source, summary, overall_sentiment_score, relevance_score)
+            VALUES (:published_at, :title, :url, :source, :summary,
+                    :overall_sentiment_score, :relevance_score)
+            """,
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _covered_days(path: Path) -> set[str]:
+    """Days (YYYY-MM-DD) already in the target DB, for resume support."""
+    if not path.exists():
+        return set()
+    conn = sqlite3.connect(str(path))
+    try:
+        rows = conn.execute("SELECT published_at FROM news_headlines").fetchall()
+    finally:
+        conn.close()
+    return {r[0][:10] for r in rows}
 
 
 def main() -> None:
@@ -207,29 +229,43 @@ def main() -> None:
     start = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
     end = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
     gold_terms = _load_gold_terms()
+
     print(f"Gold terms: {gold_terms}")
     print(f"Pulling {start.date()} -> {end.date()} ({args.chunk_days}-day chunks)")
 
+    if not args.dry_run:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        _init_db(args.out)
+
+    # Resume support: skip days already in the target DB.
+    covered = _covered_days(args.out) if not args.dry_run else set()
+    if covered:
+        print(f"Resume: {len(covered)} days already in DB; skipping them.")
+
     chunks = _chunk_days(start, end, args.chunk_days)
-    all_rows: list[dict] = []
+
+    total_new = 0
     for i, (c_start, c_end) in enumerate(chunks):
-        # GDELT returns the newest records first; query day-by-day to avoid
-        # the 250-record cap dropping older articles in a multi-day chunk.
+        chunk_new = 0
         for d_off in range((c_end - c_start).days + 1):
             day = c_start + timedelta(days=d_off)
+            day_key = day.strftime("%Y-%m-%d")
+            if day_key in covered:
+                continue
             articles = _query_gdelt_day(args.query, day, max_records=args.max_records)
             normalized = _normalize_articles(articles, gold_terms)
-            all_rows.extend(normalized)
+            if normalized:
+                if not args.dry_run:
+                    _append_rows(args.out, normalized)
+                total_new += len(normalized)
+                chunk_new += len(normalized)
+            covered.add(day_key)
             time.sleep(REQUEST_DELAY_SECONDS)
-        print(f"  chunk {i+1}/{len(chunks)} done ({c_start.date()}..{c_end.date()}), "
-              f"running total {len(all_rows)}")
+        print(f"  chunk {i+1}/{len(chunks)} done ({c_start.date()}..{c_end.date()}): "
+              f"+{chunk_new} new, running total {total_new}")
 
-    print(f"\nTotal gold-relevant headlines: {len(all_rows)}")
-    if not args.dry_run and all_rows:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        _write_db(args.out, all_rows)
-        print(f"Wrote {len(all_rows)} rows to {args.out}")
-    elif args.dry_run:
+    print(f"\nTotal gold-relevant headlines added: {total_new}")
+    if args.dry_run:
         print("[dry-run] no DB written")
 
 
