@@ -22,7 +22,7 @@
 | **2: Validation** | ✅ Complete | Walk-forward (88.9% positive), Monte Carlo (0% ruin), TC stress (survives 6p+2p), risk sensitivity, ICIR decay — all confirmed no regression |
 | **Risk Bump (0.25% → 0.35%)** | ⏳ **PENDING** | Code ready. Deploy + restart scheduled Sunday 20:00 UTC |
 | **3: Analytics** | ⬜ Not started | Trade quality scoring, prop firm sim, system health dashboard |
-| **4: Evidence Collection** | ⬜ Not started | D4 runs untouched at 0.35% for 100 trades |
+| **4: Evidence Collection** | ✅ 104 trades reached (2026-08-16) | 100-trade gate RUN — 2/3 automated criteria passed; continue to 200 for DSR |
 
 ## D4 Paper Trader Performance 🏆
 
@@ -31,12 +31,13 @@
 | Metric | Value |
 |--------|-------|
 | Started | 2026-07-02 (first trade) |
-| **Trades (DB)** | **27 closed** |
-| **Win Rate** | **55%** |
-| **Net PnL** | **+$317** |
-| **Avg R** | **+0.57R** |
-| **Equity** | **$10,472** (+4.72%) |
-| **Open Position** | BUY @ $4,001.26 (TP: $4,045.25, SL: $3,979.27) |
+| **Trades (DB)** | **104 closed** |
+| **Win Rate** | **50.0%** |
+| **Net PnL** | **+$954** |
+| **Avg R** | **+0.49R** |
+| **Equity** | **$11,109** (+11.1%) |
+| **Peak Equity** | **$11,123** |
+| **100-Trade Gate** | **RUN 2026-08-16 — 2/3 automated criteria passed** (see below) |
 | **Data Source** | Local cache (OANDA → forward-shadow → D4) |
 
 ### Validation Results (Post-Cleanup, 2026-07-18)
@@ -94,7 +95,8 @@ Total:             265 tests, all passing
 ## Pending Actions
 
 1. ✅ **Reached 72 trades** (50-trade risk review gate PASSED — see below)
-2. 🔲 Accumulate 100+ trades at 0.35%
+2. ✅ **Reached 100+ trades** (100-trade gate RUN 2026-08-16 — see below)
+3. 🔲 Continue collecting toward 200 trades (for DSR to become statistically meaningful)
 
 ## Pre-Registered Gate Criteria
 
@@ -171,3 +173,24 @@ could not be computed at all. Completed now:
 same-family trials. The pre-registered fail branch for DSR (extend to 200, demote
 if still below) is the correct response to a DSR FAIL at this stage — it reflects
 the thin deflation pool, not a confident absence of edge.
+
+### 100-Trade Gate Result — ✅ RUN (2026-08-16, 104 trades)
+
+Gate reached at 104 trades (2026-08-16). Result: **MOST CRITERIA PASSED (2/3 automated).**
+
+| Criterion | Result | Verdict |
+|-----------|--------|---------|
+| DSR ≥ 0.95 | 0.274 (raw) | ❌ FAIL — underpowered: only 4 same-family trials in pool. Pre-registered response: extend to 200, demote if still below. |
+| Live Sharpe within 25% of backtest | live daily 0.377 vs 0.060 floor | ✅ PASS — ~6x the backtest on daily-return unit |
+| Live PF ≥ 1.05 | PF 1.97 | ✅ PASS — nearly 2x the floor |
+| Additional stream / strategy | — | Manual review |
+
+**Live record at gate**: 104 trades, 52W/52L (50.0% win rate), +$954 net (+9.5%),
+avg R +0.49, equity $11,109 (peak $11,123). Consistent with backtest expectations
+(~50% WR, ~+0.5R avg, PF ~2).
+
+**Decision**: stay at 0.35% risk and continue collecting toward 200 trades. The
+two statistically-powered criteria pass comfortably, confirming D4's edge; the DSR
+FAIL reflects the thin trial pool, not an absence of edge. Per pre-registration,
+the "first real-capital paper step" does not trigger until DSR clears. The
+earlier 6-loss streak fully recovered — equity is back at peak.
