@@ -716,7 +716,7 @@ def write_shadow_state(path: Path, state: ShadowState, settings: dict[str, Any],
             candle_payloads,
         )
         run_payload = {
-            "run_at": datetime.now(UTC).isoformat(),
+            "run_at": datetime.now(UTC).isoformat(timespec="microseconds"),
             "strategy": STRATEGY_NAME,
             "signal_count": len(state.signals),
             "trade_count": len(state.trades),
@@ -747,7 +747,7 @@ def write_shadow_state(path: Path, state: ShadowState, settings: dict[str, Any],
 def write_audit_snapshots(conn: sqlite3.Connection, record_type: str, records: list[dict[str, Any]], *, key_field: str) -> None:
     if not records:
         return
-    observed_at = datetime.now(UTC).isoformat()
+    observed_at = datetime.now(UTC).isoformat(timespec="microseconds")
     rows: list[tuple[str, str, str, str, str]] = []
     for record in records:
         payload = json.dumps(record, sort_keys=True, default=str, separators=(",", ":"))
@@ -784,7 +784,7 @@ def record_event(path: Path, event_type: str, severity: str, message: str, detai
             INSERT INTO shadow_events(event_time, event_type, severity, message, details)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (datetime.now(UTC).isoformat(), event_type, severity, message, json.dumps(details, sort_keys=True, default=str)),
+            (datetime.now(UTC).isoformat(timespec="microseconds"), event_type, severity, message, json.dumps(details, sort_keys=True, default=str)),
         )
 
 
@@ -935,19 +935,19 @@ def weekly_report(shadow_db: Path, report_dir: Path, as_of: str | None) -> dict[
         events = pd.read_sql_query("SELECT * FROM shadow_events", conn)
         candles = pd.read_sql_query("SELECT * FROM shadow_candles", conn)
     if not trades.empty:
-        trades["exit_time"] = pd.to_datetime(trades["exit_time"], utc=True)
+        trades["exit_time"] = pd.to_datetime(trades["exit_time"], utc=True, format="mixed")
         trades = trades[(trades["exit_time"] >= start_ts) & (trades["exit_time"] <= as_of_ts)].copy()
     if not signals.empty:
-        signals["signal_time"] = pd.to_datetime(signals["signal_time"], utc=True)
+        signals["signal_time"] = pd.to_datetime(signals["signal_time"], utc=True, format="mixed")
         signals = signals[(signals["signal_time"] >= start_ts) & (signals["signal_time"] <= as_of_ts)].copy()
     if not equity.empty:
-        equity["timestamp"] = pd.to_datetime(equity["timestamp"], utc=True)
+        equity["timestamp"] = pd.to_datetime(equity["timestamp"], utc=True, format="mixed")
         equity = equity[(equity["timestamp"] >= start_ts) & (equity["timestamp"] <= as_of_ts)].copy()
     if not events.empty:
-        events["event_time"] = pd.to_datetime(events["event_time"], utc=True)
+        events["event_time"] = pd.to_datetime(events["event_time"], utc=True, format="mixed")
         events = events[(events["event_time"] >= start_ts) & (events["event_time"] <= as_of_ts)].copy()
     if not candles.empty:
-        candles["timestamp"] = pd.to_datetime(candles["timestamp"], utc=True)
+        candles["timestamp"] = pd.to_datetime(candles["timestamp"], utc=True, format="mixed")
         candles = candles[(candles["timestamp"] >= start_ts) & (candles["timestamp"] <= as_of_ts)].copy()
     report = build_weekly_report(trades, signals, equity, events, candles, start_ts, as_of_ts)
     report["health"] = status_report(shadow_db, as_of=as_of_ts)

@@ -266,6 +266,35 @@ def test_weekly_report_metrics_calculate(tmp_path: Path, monkeypatch: pytest.Mon
     assert "runtime_environment" in report["health"]
 
 
+def test_weekly_report_survives_mixed_event_time_formats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: a shadow_events.event_time row without fractional seconds used to crash weekly_report.
+
+    record_event writes datetime.now(UTC).isoformat(), which drops the ".000000" fraction when
+    microseconds are exactly zero. One such row among 263k fraction-carrying rows made pandas infer
+    the "%Y-%m-%dT%H:%M:%S.%f%z" format and then raise ValueError on the no-fraction value. The
+    reader must tolerate the mix (format="mixed").
+    """
+    monkeypatch.delenv("ALLOW_OANDA_ORDERS", raising=False)
+    settings = settings_for(tmp_path)
+    shadow_db = tmp_path / "shadow.sqlite3"
+    init_shadow_db(shadow_db, settings)
+
+    with sqlite3.connect(shadow_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO shadow_events(event_time, event_type, severity, message, details)
+            VALUES (?, 'shadow_update', 'INFO', 'one without fraction', '{}'),
+                   (?, 'shadow_update', 'INFO', 'with fraction', '{}')
+            """,
+            ("2026-08-08T11:55:40+00:00", "2026-08-08T11:56:00.123456+00:00"),
+        )
+
+    report = weekly_report(shadow_db, tmp_path, "2026-08-09T00:00:00Z")
+
+    assert report["classification"] == "research-only"
+    assert "health" in report
+
+
 def test_forward_shadow_parity_against_donchian_historical_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALLOW_OANDA_ORDERS", raising=False)
     monkeypatch.delenv("ALLOW_LIVE_TRADING", raising=False)

@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/aurum1
+Environment=PYTHONPATH=/opt/aurum1
 EnvironmentFile=/opt/aurum1/.env
 Environment=ALLOW_OANDA_ORDERS=false
 Environment=ALLOW_LIVE_TRADING=false
