@@ -9,6 +9,7 @@ Type=oneshot
 User=aurum1
 Group=aurum1
 WorkingDirectory=/opt/aurum1
+Environment=PYTHONPATH=/opt/aurum1
 Environment=OANDA_ENV=practice
 Environment=ALLOW_OANDA_ORDERS=false
 Environment=ALLOW_LIVE_TRADING=false

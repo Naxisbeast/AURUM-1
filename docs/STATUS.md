@@ -1,17 +1,47 @@
 # AURUM-1 System Status
 
-**Last updated**: 2026-08-16
+**Last updated**: 2026-08-28
 
 ## Operational Status
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35%** — 104 trades, 100-trade gate run |
-| Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — 236K+ M15 candles cached. |
+| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35%** — 136 trades, +$1,161 net, equity $11,316 (+13.2%) |
+| Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — 29K+ M15 candles cached, errors_24h=0 |
 | Dashboard | ✅ **ACTIVE** | Streamlit via Cloudflare tunnel |
-| D1-D7 Shadow Journals | 🟡 **VARIOUS** | D4 shadow runs on timer; D2-D7 are research-only |
+| D1-D7 Shadow Journals | ✅ **FIXED (2026-08-28)** | D4 shadow timer was failing since Jul 21 (stale paths). Repaired + now runs clean. D2-D7 research-only |
+| Weekly Report | ✅ **FIXED (2026-08-28)** | Was crashing since 2026-08-08 (timestamp format bug). Fixed in code, pending server deploy |
 | ML Retrain | ❌ **DISABLED** | Timer exists but models are unused in production |
 | Main Orchestrator | ❌ **STOPPED** | Last run May 27 2026. D4 replaced it. |
+
+## 2026-08-28 Maintenance — Deploy Gap + Weekly Report Fix
+
+**Symptom**: `aurum1-d4-shadow.service` failing every 15 min (2,353 failures since Aug 1);
+`aurum1-forward-shadow-weekly-report.service` failing weekly since Jul 26.
+
+**Root cause 1 — Deploy gap**: Server was 55 commits behind (deployed `5d90c21`, Jul 20).
+The Jul 21 `parents[1]→parents[2]` path fix (commit `a9757f0`) was never deployed, leaving
+24 scripts with a stale `ROOT` path, and the systemd units still pointed at pre-reorg
+`scripts/forward_shadow_*.py` paths. Critical services (D4 paper trader, forward shadow,
+dashboard, watchdog) were unaffected — only shadow/journaling units broke.
+
+**Fixed**:
+- All 5 shadow/report units corrected to `scripts/shadow/` paths + `PYTHONPATH=/opt/aurum1`.
+  Originals backed up to `/opt/aurum1/backups/units-20260825/`.
+- Corrected d2/d3/d4/d5 shadow scripts (with `parents[2]`) deployed. D4 shadow now exits 0.
+- Repo deploy templates updated to include `PYTHONPATH=/opt/aurum1`; new `aurum1-d6-shadow.service.template` added.
+
+**Root cause 2 — Weekly report timestamp bug**: `record_event` wrote `datetime.now(UTC).isoformat()`,
+which drops `.000000` microseconds when they are exactly zero. One `shadow_update` row landed without
+a fraction among 263,847 fraction-carrying rows; `weekly_report()`'s `pd.to_datetime(..., utc=True)`
+crashed on the mixed format. Fixed in code:
+- Writer: `isoformat(timespec="microseconds")` at 3 sites (run_at, observed_at, event_time).
+- Reader: `format="mixed"` on 5 timestamp columns in `weekly_report()`.
+- Regression test: `test_weekly_report_survives_mixed_event_time_formats`.
+- Pending: deploy fixed script to server + repair the 1 bad DB row.
+
+**Note**: The recent paper-trade loss streak (6 of last 8 since Aug 25) is normal D4 behavior in
+ranging gold, not a system fault — verified the paper trader is independent of all files touched.
 
 ## Hardening Status (Phases 0-2 Complete ✅)
 
@@ -31,7 +61,7 @@
 | Metric | Value |
 |--------|-------|
 | Started | 2026-07-02 (first trade) |
-| **Trades (DB)** | **104 closed** |
+| **Trades (DB)** | **136 closed** (2026-08-28) |
 | **Win Rate** | **50.0%** |
 | **Net PnL** | **+$954** |
 | **Avg R** | **+0.49R** |
