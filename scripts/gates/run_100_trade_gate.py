@@ -43,11 +43,11 @@ reported across rho in {0.3, 0.5, 0.7, 0.9}.
 
 USAGE
 -----
-Live DB lives on the server (178.105.245.66). Pull a consistent snapshot
-before running:
+The live paper-trading DB lives on the deployment server. Pull a consistent
+snapshot before running:
 
-    ssh root@178.105.245.66 "sqlite3 /opt/aurum1/aurum1/data/paper_trading.sqlite3 '.backup /tmp/paper_trading.sqlite3'"
-    scp root@178.105.245.66:/tmp/paper_trading.sqlite3 aurum1/data/paper_trading.sqlite3
+    ssh <user>@<server> "sqlite3 /opt/aurum1/aurum1/data/paper_trading.sqlite3 '.backup /tmp/paper_trading.sqlite3'"
+    scp <user>@<server>:/tmp/paper_trading.sqlite3 aurum1/data/paper_trading.sqlite3
 
     python scripts/gates/run_100_trade_gate.py --trades-db aurum1/data/paper_trading.sqlite3
 
