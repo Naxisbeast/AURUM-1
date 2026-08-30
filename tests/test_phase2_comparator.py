@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_live_vs_backtest_comparator import (
+from scripts.paper_trading.run_live_vs_backtest_comparator import (
     D4_BASELINE,
     assess_alignment,
     compute_metrics,

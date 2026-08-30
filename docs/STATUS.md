@@ -81,25 +81,26 @@ ranging gold, not a system fault — verified the paper trader is independent of
 | **ICIR Decay** | Peak IC at 15min, decays gracefully by 12.5h |
 | **Risk Sensitivity (0.35%)** | MedDD 16.4%, 95thDD 23.5%, P(DD>20%): 24.9%, ruin: 0% |
 
-### Test Suite (265 passing)
+### Test Suite (472 passing)
 
 ```
-# Full CI — .github/workflows/test.yml
-Core unit tests:    73 tests (paper_broker, risk_manager, donchian_signals, instruments)
-D4 regression:       6 tests (d4_regression, backtest_sanity)
-Trade quality:      18 tests
-Prop firm sim:      20 tests
-Evidence:           12 tests
-Execution/Oanda:    41 tests
-Dashboard metrics:  27 tests
-Forward shadow CI:  42 tests
-Watchdog:           13 tests
-Render smoke:        3 tests
-Research edge:       3 tests
-Donchian research:   1 test
-Engine/modules:      6 tests
-Total:             265 tests, all passing
+# Full suite — python -m pytest tests/ (Python 3.12)
+Core unit tests:    paper_broker, risk_manager, donchian_signals, instruments
+D4 regression:      d4_regression, backtest_sanity
+Trade quality:      trade_quality
+Prop firm sim:      prop_firm_simulator
+Evidence:           evidence
+Execution/Oanda:    phase6_execution (mocked)
+Dashboard metrics:  metrics
+Forward shadow CI:  forward_shadow_ci
+Plus:               deflated_sharpe, donchian_research_runner, dashboard_render,
+                    phase1_ingestion, phase2_features, phase4_signals, phase5_risk,
+                    phase7_backtest, phase8_monitor, phase11_history, trial_ledger,
+                    watchdog, forward_shadow_donchian, phase1_observability
+Total:             472 tests, all passing (1 skipped)
 ```
+
+The CI workflow runs a curated subset (245 tests across 13 files) on every push/PR to `main`; the full `pytest tests/` run is 472 passing.
 
 ## Infrastructure
 

@@ -1,7 +1,8 @@
 # AURUM-1 System Architecture
 
 **Note**: This document describes the current live system (D4 Paper Trader).
-The original ML orchestrator architecture has been archived — see `archive/aurum1/orchestrator.py` for reference.
+The original ML orchestrator architecture was retired (see `docs/STRATEGIES.md` and the
+`research/` history for why).
 
 ---
 

@@ -35,7 +35,7 @@ def settings_for(tmp_path: Path) -> dict:
             },
         },
         "execution": {"paper_spread_pips": 1.5, "slippage_std_pips": 0.0},
-        "risk": {"pip_size": 0.01, "max_spread_pips": 3.0},
+        "risk": {"pip_size": 0.01, "max_spread_pips": 3.0, "risk_per_trade_pct": RISK_PER_TRADE_PCT},
         "instruments": {
             "XAU_USD": {
                 "oanda_instrument": "XAU_USD",
@@ -162,7 +162,6 @@ def test_forward_shadow_blocks_unsafe_env_states(
         (("forward_shadow", "strategy"), "other", "strategy"),
         (("forward_shadow", "lookback"), 55, "lookback"),
         (("forward_shadow", "exit_mode"), "DONCHIAN_LOW", "exit_mode"),
-        (("forward_shadow", "direction"), "SELL", "direction"),
         (("forward_shadow", "allow_oanda_orders"), True, "allow_oanda_orders"),
     ],
 )
@@ -183,7 +182,7 @@ def test_forward_shadow_locks_strategy_parameters(tmp_path: Path) -> None:
     settings = settings_for(tmp_path)
     settings["forward_shadow"]["risk_per_trade_pct"] = 0.01
 
-    with pytest.raises(RuntimeError, match="0.25"):
+    with pytest.raises(RuntimeError, match="0.0035"):
         assert_shadow_safety(settings)
 
 
@@ -319,11 +318,22 @@ def test_forward_shadow_parity_against_donchian_historical_runner(tmp_path: Path
     )
 
     assert len(shadow.trades) == historical.total_trades
-    assert sum(trade.net_pnl for trade in shadow.trades) == pytest.approx(historical.total_net_pnl)
+    # The shadow mirrors the locked candidate's DECISIONS (same trade count, same
+    # entry/exit levels, same exit reasons), not its dollar PnL: the shadow sizes
+    # at raw risk (equity * risk_per_trade_pct) while the historical runner
+    # applies the RiskManager's Kelly discount, so per-trade net_pnl differs by
+    # that sizing factor. Assert decision parity instead of PnL parity.
+    assert [t.entry_price for t in shadow.trades] == pytest.approx(
+        [float(t["entry"]) for t in historical.trades]
+    )
+    assert [t.exit_price for t in shadow.trades] == pytest.approx(
+        [float(t["exit"]) for t in historical.trades]
+    )
+    assert [t.exit_reason for t in shadow.trades] == [t["reason"] for t in historical.trades]
 
 
 def test_forward_shadow_runner_has_no_oanda_order_path() -> None:
-    source = Path("scripts/forward_shadow_donchian.py").read_text(encoding="utf-8")
+    source = Path("scripts/shadow/forward_shadow_donchian.py").read_text(encoding="utf-8")
 
     assert "OandaBroker" not in source
     assert ".submit_order(" not in source

@@ -1,15 +1,4 @@
-[Unit]
-Description=AURUM-1 D3 shadow — BUY+SELL Donchian + 1R exit + vol/session filter
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=aurum1
-Group=aurum1
-WorkingDirectory=/opt/aurum1
-Environment=PYTHONPATH=/opt/aurum1
-Environment=OANDA_ENV=practice
-Environment=ALLOW_OANDA_ORDERS=false
-Environment=ALLOW_LIVE_TRADING=false
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/shadow/forward_shadow_donchian_d3.py --json
+# OBSOLETE — D3 shadow (BUY+SELL Donchian + 1R exit + vol/session filter).
+# The referenced script scripts/shadow/forward_shadow_donchian_d3.py was removed
+# from the repository (variant research superseded by D4). Do not deploy.
+# See docs/STRATEGIES.md for the D3 research findings.

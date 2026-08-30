@@ -10,7 +10,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/aurum1
 Environment=PYTHONPATH=/opt/aurum1
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/monitor/watchdog.py
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/monitor/d4_watchdog.py
 Restart=on-failure
 RestartSec=5
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from aurum1.data.ingestion import AurumDataIngestor, initialize_database, load_ohlcv, load_settings
-from scripts import audit_market_cache, fetch_oanda_history
+from scripts.data import audit_market_cache, fetch_oanda_history
 
 
 ROOT = Path(__file__).resolve().parents[1]

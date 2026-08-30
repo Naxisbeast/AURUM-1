@@ -2,8 +2,8 @@
 
 These exist so that `backtesting/engine.py`, `walk_forward.py`, and a small
 number of test files can still import `SignalResult` and `REGIME_LABELS`
-without depending on the archived `aurum1/models/` package and the rejected
-state machine.
+without depending on the retired ML model package (archived after research
+showed the ML layers added no edge) and the rejected state machine.
 
 Once `engine.py` and `walk_forward.py` are themselves refactored to not
 reference these, this file can be deleted.
@@ -60,7 +60,7 @@ REGIME_LABELS: dict[int, str] = {
 class RegimeClassifierStub:
     """Minimal stub preserving the static method used by backtesting/engine.py.
 
-    The real RegimeClassifier is archived at archive/aurum1/models/. This stub
+    The real RegimeClassifier was retired with the ML model package. This stub
     exists solely so engine.py can resolve the type annotation and the
     generate_labels() call when disable_ml=True (the production default).
     """

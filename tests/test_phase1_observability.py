@@ -188,7 +188,7 @@ class TestSpreadTracking:
         assert broker.get_current_spread_pips("XAU_USD") == 1.5
 
     def test_spread_via_candle_prices(self) -> None:
-        """Spread is used in trade cost calculation."""
+        """Slippage (not a separate spread line) captures trade friction."""
         cfg = settings()
         cfg["execution"]["paper_spread_pips"] = 2.0
         broker = PaperBroker(cfg)
@@ -200,8 +200,13 @@ class TestSpreadTracking:
 
         assert len(broker._trade_history) == 1
         trade = broker._trade_history[0]
+        # The audit zeroed PaperBroker._spread_cost because spread friction is
+        # already embedded in the folded-normal slippage applied to fill prices;
+        # a separate spread line double-counted cost. Friction is captured via
+        # total_slippage_cost instead.
         spread_cost = float(trade.get("spread_cost", 0))
-        assert spread_cost > 0
+        assert spread_cost == 0.0
+        assert float(trade.get("total_slippage_cost", 0)) > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +479,10 @@ class TestObservabilityIntegration:
         assert len(broker._trade_history) == 1
         trade = broker._trade_history[0]
         assert float(trade.get("exit_slippage_cost", 0)) > 0
-        assert float(trade.get("spread_cost", 0)) > 0
+        # Spread friction is embedded in the folded-normal slippage model; the
+        # separate _spread_cost line was zeroed in the audit to avoid
+        # double-counting cost (see PaperBroker._spread_cost).
+        assert float(trade.get("spread_cost", 0)) == 0.0
         assert float(trade.get("r_multiple", 0)) > 0
 
     def test_sell_trade_produces_slippage_spread(self, monkeypatch) -> None:
@@ -503,7 +511,10 @@ class TestObservabilityIntegration:
         assert len(broker._trade_history) == 1
         trade = broker._trade_history[0]
         assert float(trade.get("exit_slippage_cost", 0)) > 0
-        assert float(trade.get("spread_cost", 0)) > 0
+        # Spread friction is embedded in the folded-normal slippage model; the
+        # separate _spread_cost line was zeroed in the audit to avoid
+        # double-counting cost (see PaperBroker._spread_cost).
+        assert float(trade.get("spread_cost", 0)) == 0.0
         assert float(trade.get("r_multiple", 0)) > 0
 
     def test_slippage_is_cost_center(self, monkeypatch) -> None:

@@ -6,7 +6,7 @@
 
 AURUM-1 has two independent strategy paths that share the same codebase:
 
-1. **Main Orchestrator Strategy** — ML ensemble + pullback-breakout state machine (STOPPED, archived in `archive/aurum1/orchestrator.py`)
+1. **Main Orchestrator Strategy** — ML ensemble + pullback-breakout state machine (STOPPED — retired after research showed the ML layers added no edge; see "Things That Didn't Work" in the README)
 2. **Donchian Shadow Strategies** — Simple Donchian 20 breakout with configurable exits, directions, and filters
 
 The Donchian family has been systematically researched through phases S1-S5 and narrowed to 6 named variants (D1-D6), with **D4** emerging as the best performer over 11 years of backtest data.

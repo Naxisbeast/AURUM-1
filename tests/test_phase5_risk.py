@@ -123,9 +123,13 @@ def test_kelly_computed_from_trade_history() -> None:
     history += [{"pnl": -80.0, "direction": "SELL", "entry": 2.0, "exit": 1.0}] * 12
 
     order = make_rm().evaluate(make_instruction(), make_account(), history)
+    # Kelly is computed from R-multiples, then capped once at kelly_max_fraction.
+    # The double-cap (kelly_cap * full_kelly) was removed in the audit because it
+    # sized positions to effectively zero. With a 0.6 win rate and 1.25 win/loss
+    # ratio, full_kelly = 0.28, capped to 0.25.
     win_rate = 18 / 30
     win_loss_ratio = 100.0 / 80.0
-    expected = min(max(0.0, win_rate - (1 - win_rate) / win_loss_ratio) * 0.25, 0.25)
+    expected = min(max(0.0, win_rate - (1 - win_rate) / win_loss_ratio), 0.25)
 
     assert 0.0 < order.kelly_fraction <= 0.25
     assert order.kelly_fraction == pytest.approx(expected, abs=0.001)

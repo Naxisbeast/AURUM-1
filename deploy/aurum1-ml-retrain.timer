@@ -1,9 +1,0 @@
-[Unit]
-Description=Weekly AURUM-1 ML model retraining
-
-[Timer]
-OnCalendar=sat 00:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target

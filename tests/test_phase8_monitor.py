@@ -129,7 +129,16 @@ def test_dashboard_binds_localhost_by_default() -> None:
 def test_deployment_services_do_not_run_as_root() -> None:
     root = Path(__file__).resolve().parents[1]
 
-    for path in (root / "deploy" / "aurum1.service.template", root / "deploy" / "dashboard.service.template"):
+    service_files = [
+        root / "deploy" / "aurum1-d4-paper.service",
+        root / "deploy" / "aurum1-d4-paper.service.template",
+        root / "deploy" / "dashboard.service.template",
+        root / "deploy" / "aurum1-dashboard.service",
+        root / "deploy" / "aurum1-forward-shadow.service",
+        root / "deploy" / "forward-shadow.service.template",
+        root / "deploy" / "aurum1-d4-shadow.service",
+    ]
+    for path in service_files:
         text = path.read_text(encoding="utf-8")
         assert "User=aurum1" in text
         assert "Group=aurum1" in text
