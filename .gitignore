@@ -81,6 +81,10 @@ aurum1_deploy.zip
 .idea/
 .DS_Store
 Thumbs.db
+*.lnk
+
+# Retired code directories (kept local-only after archive removal)
+archive/
 
 # Temporary and generated files
 *.zip
