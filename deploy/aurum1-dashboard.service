@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/aurum1
-ExecStart=/opt/aurum1/.venv/bin/python -m streamlit run /opt/aurum1/monitor/dashboard.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+ExecStart=/opt/aurum1/.venv/bin/python -m streamlit run /opt/aurum1/monitor/dashboard.py --server.port=8501 --server.address=127.0.0.1 --server.headless=true
 Restart=on-failure
 RestartSec=10
 User=aurum1

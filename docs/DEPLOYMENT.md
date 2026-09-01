@@ -1,6 +1,6 @@
 # AURUM-1 Deployment Guide
 
-**Last updated**: 2026-07-21 (Hardening v1.0 complete)
+**Last updated**: 2026-09-01 (Server state record; weekly-report fix deployed)
 
 ## Server Architecture
 
@@ -341,3 +341,95 @@ journalctl -u aurum1-d4-paper.service --since today --no-pager | grep 'OBSERVABI
 **Database growing too large**:
 - The shadow database grows ~3MB/day. 28 daily backups are retained.
 - Clean old backups manually if needed: `rm backups/forward_shadow/old_backup.sqlite3`
+
+---
+
+## Current Server State — Reproducibility Record (2026-09-01)
+
+The server (`root@178.105.245.66`, `/opt/aurum1`) is a **hand-patched deployment**, not a
+git-synced checkout. Git HEAD is stale (`5d90c21`, Jul 20) while the **working tree files
+match `main` byte-for-byte** on every production path. Do NOT `git pull`/`git reset` blindly —
+it will either conflict or clobber the live hand-patched state.
+
+### Running services
+
+```
+aurum1-d4-paper.service          running   autonomous D4 paper trading
+aurum1-forward-shadow.service    running   market data cache + raw Donchian study
+aurum1-dashboard.service         running   dashboard web UI
+aurum1-tunnel.service            running   cloudflared named tunnel
+aurum1-watchdog.service          running   independent kill-switch monitor
+aurum1-d4-shadow.timer           waiting   D4 shadow, every 15 min
+aurum1-forward-shadow-backup.timer   waiting   daily SQLite backup
+aurum1-forward-shadow-weekly-report.timer waiting   weekly report
+```
+
+### Verified: working tree == `main` (byte-identical, 2026-09-01)
+
+| File | Server SHA (normalized) | `main` SHA | Status |
+|------|-------------------------|-----------|--------|
+| `aurum1/execution/broker.py` | `f55f876f` | `f55f876f` | ✅ price collar present |
+| `monitor/dashboard.py` | `2601ddde` | `2601ddde` | ✅ |
+| `monitor/metrics.py` | `b2a8c213` | `b2a8c213` | ✅ |
+| `scripts/shadow/forward_shadow_donchian.py` | `82f65481` | `82f65481` | ✅ timestamp fix deployed |
+| `scripts/shadow/forward_shadow_donchian_d2.py` | `edadb99a` | `edadb99a` | ✅ |
+| `scripts/shadow/forward_shadow_donchian_d3.py` | `b85e6a32` | `b85e6a32` | ✅ |
+| `scripts/shadow/forward_shadow_donchian_d4.py` | `43e43002` | `43e43002` | ✅ |
+| `scripts/shadow/forward_shadow_donchian_d5.py` | `ddd99b51` | `ddd99b51` | ✅ |
+
+`git status` shows these as `M` because the server's git HEAD (`5d90c21`) predates main and
+the working files were copied over by hand (some carry CRLF from a Windows copy). **Content is
+identical to `main`.** The giant `git diff --stat` numbers are line-ending noise, not drift.
+
+### Systemd units — reconciled to hardened running state (2026-09-01)
+
+The running units on the server are **hardened**: all continuous services set
+`ALLOW_OANDA_ORDERS=false`, `ALLOW_LIVE_TRADING=false`, `OANDA_ENV=practice`; the dashboard
+binds `127.0.0.1` (localhost, behind the cloudflared tunnel) — NOT `0.0.0.0`. The repo
+`deploy/aurum1-dashboard.service` was updated (was `0.0.0.0`) to match, so a rebuild from the
+repo templates reproduces the safe configuration. All 8 production scripts verified to parse
+and import cleanly on the server (2026-09-01).
+
+### Pending-fix status
+
+- **Weekly-report timestamp crash — FIXED 2026-09-01.** Fixed `forward_shadow_donchian.py`
+  deployed (was staged at `/tmp/aurum1-fix/`, now installed at
+  `/opt/aurum1/scripts/shadow/forward_shadow_donchian.py`). The 1 anomalous row in
+  `donchian_shadow.sqlite3` (`event_time` without microsecond fraction) was repaired to
+  `2026-08-08T11:55:40.000000+00:00`. Verified: `weekly-report` exits 0 and produces a real
+  report. Old file backed up to `backups/forward_shadow_donchian.py.bak-20260901-140105`.
+
+### Untracked runtime files (do NOT remove / commit)
+
+`.ssh/`, `run/`, `backups/`, `.cache/`, `.lesshst`, `.streamlit/machine_id_v4`,
+`dashboard/`, `monitor/d4_watchdog.py` (runtime copy), service unit files staged under repo
+root, `2026-06-28T19:39:30.486345+00:00` (stray artifact), `aurum1/data/*.sqlite3`
+(paper trading + caches), `.env`.
+
+### How to deploy a single file change to the server
+
+Because the server is hand-patched, use targeted file copies (NOT `git pull`):
+
+```bash
+# From local repo, push a fixed file to the server
+scp -i ~/.ssh/aurum1_key scripts/shadow/forward_shadow_donchian.py \
+    root@178.105.245.66:/tmp/
+ssh -i ~/.ssh/aurum1_key root@178.105.245.66 \
+    "cp /opt/aurum1/scripts/shadow/forward_shadow_donchian.py /opt/aurum1/backups/ && \
+     cp /tmp/forward_shadow_donchian.py /opt/aurum1/scripts/shadow/forward_shadow_donchian.py && \
+     chown aurum1:aurum1 /opt/aurum1/scripts/shadow/forward_shadow_donchian.py"
+
+# Verify byte-identical to main (normalized for CRLF):
+git show main:scripts/shadow/forward_shadow_donchian.py | tr -d '\r' | sha256sum
+ssh -i ~/.ssh/aurum1_key root@178.105.245.66 "tr -d '\r' < /opt/aurum1/scripts/shadow/forward_shadow_donchian.py | sha256sum"
+
+# Restart only the affected service
+ssh -i ~/.ssh/aurum1_key root@178.105.245.66 "systemctl restart aurum1-forward-shadow.service"
+```
+
+### If the server ever needs rebuilding from scratch
+
+Follow the Initial Setup section above, then re-apply the verified file list (all match `main`,
+so a fresh clone + the `deploy/*.service` units reproduces it). The only thing not in git is the
+runtime state (`*.sqlite3` under `aurum1/data/`) and `.env` — back those up first from
+`backups/`.
