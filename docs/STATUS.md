@@ -1,16 +1,16 @@
 # AURUM-1 System Status
 
-**Last updated**: 2026-08-28
+**Last updated**: 2026-09-04
 
 ## Operational Status
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35%** — 136 trades, +$1,161 net, equity $11,316 (+13.2%) |
-| Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — 29K+ M15 candles cached, errors_24h=0 |
-| Dashboard | ✅ **ACTIVE** | Streamlit via Cloudflare tunnel |
+| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35% configured** (actual ~0.17% — see Performance Assessment) — 148 trades, +$1,655 net, equity ~$11,810 (+18.1%) |
+| Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — M15 candles cached, errors_24h=0 |
+| Dashboard | ✅ **ACTIVE** | Streamlit via Cloudflare tunnel (localhost bind, hardened) |
 | D1-D7 Shadow Journals | ✅ **FIXED (2026-08-28)** | D4 shadow timer was failing since Jul 21 (stale paths). Repaired + now runs clean. D2-D7 research-only |
-| Weekly Report | ✅ **FIXED (2026-08-28)** | Was crashing since 2026-08-08 (timestamp format bug). Fixed in code, pending server deploy |
+| Weekly Report | ✅ **FIXED + DEPLOYED (2026-09-01)** | Was crashing since 2026-08-08 (timestamp format bug). Fixed in code AND deployed to server; bad DB row repaired; verified exit 0 |
 | ML Retrain | ❌ **DISABLED** | Timer exists but models are unused in production |
 | Main Orchestrator | ❌ **STOPPED** | Last run May 27 2026. D4 replaced it. |
 
@@ -38,7 +38,10 @@ crashed on the mixed format. Fixed in code:
 - Writer: `isoformat(timespec="microseconds")` at 3 sites (run_at, observed_at, event_time).
 - Reader: `format="mixed"` on 5 timestamp columns in `weekly_report()`.
 - Regression test: `test_weekly_report_survives_mixed_event_time_formats`.
-- Pending: deploy fixed script to server + repair the 1 bad DB row.
+- ✅ **DEPLOYED 2026-09-01**: fixed script installed on server (was staged at `/tmp/aurum1-fix/`,
+  verified byte-identical to `main`), the 1 bad `event_time` row repaired to
+  `2026-08-08T11:55:40.000000+00:00`, and `weekly-report` verified to exit 0. Old file backed up
+  to `backups/forward_shadow_donchian.py.bak-20260901-140105`.
 
 **Note**: The recent paper-trade loss streak (6 of last 8 since Aug 25) is normal D4 behavior in
 ranging gold, not a system fault — verified the paper trader is independent of all files touched.
@@ -61,13 +64,15 @@ ranging gold, not a system fault — verified the paper trader is independent of
 | Metric | Value |
 |--------|-------|
 | Started | 2026-07-02 (first trade) |
-| **Trades (DB)** | **136 closed** (2026-08-28) |
-| **Win Rate** | **50.0%** |
-| **Net PnL** | **+$954** |
-| **Avg R** | **+0.49R** |
-| **Equity** | **$11,109** (+11.1%) |
-| **Peak Equity** | **$11,123** |
+| **Trades (DB)** | **148 closed** (2026-09-03) |
+| **Win Rate** | **52.0%** |
+| **Net PnL** | **+$1,655** |
+| **Avg R** | **+0.56R** (t=+4.47, significant) |
+| **Profit Factor** | **2.15** |
+| **Equity** | **~$11,810** (+18.1%) |
+| **Max Drawdown** | **1.64%** (snapshot-derived) |
 | **100-Trade Gate** | **RUN 2026-08-16 — 2/3 automated criteria passed** (see below) |
+| **Under-Risk Assessment** | **2026-09-04 — not a bug; sizing stays until 200-trade DSR** (see Performance Assessment doc) |
 | **Data Source** | Local cache (OANDA → forward-shadow → D4) |
 
 ### Validation Results (Post-Cleanup, 2026-07-18)
@@ -121,12 +126,14 @@ Total:             265 tests, all passing
 - **Jun 28**: D4 paper trader deployed.
 - **Jul 14**: Dashboard deployed. Phase 0-2 research complete.
 - **Jul 18**: Hardening v1.0 Phases 0-2 complete. Risk bump prepared.
+- **Sep 01**: Weekly-report timestamp fix deployed to server; server verified byte-identical to main (hand-patched deploy, do not git pull — see `docs/DEPLOYMENT.md`).
+- **Sep 04**: Performance assessment — edge significant (t=+4.47); under-risking (0.17% actual vs 0.35% config) is NOT a bug; sizing stays until 200-trade DSR gate (see `docs/PERFORMANCE_ASSESSMENT_2026-09-04.md`).
 
 ## Pending Actions
 
 1. ✅ **Reached 72 trades** (50-trade risk review gate PASSED — see below)
 2. ✅ **Reached 100+ trades** (100-trade gate RUN 2026-08-16 — see below)
-3. 🔲 Continue collecting toward 200 trades (for DSR to become statistically meaningful)
+3. 🔲 Continue collecting toward 200 trades (for DSR to become statistically meaningful) — **currently 148 (2026-09-04)**
 
 ## Pre-Registered Gate Criteria
 
@@ -224,3 +231,22 @@ two statistically-powered criteria pass comfortably, confirming D4's edge; the D
 FAIL reflects the thin trial pool, not an absence of edge. Per pre-registration,
 the "first real-capital paper step" does not trigger until DSR clears. The
 earlier 6-loss streak fully recovered — equity is back at peak.
+
+### 200-Trade Gate Standing (2026-09-04, 148 trades)
+
+Still collecting toward 200 (DSR needs the fuller pool to become meaningful).
+Current standing at 148 trades, from `docs/PERFORMANCE_ASSESSMENT_2026-09-04.md`:
+
+| Criterion | Current read |
+|-----------|--------------|
+| DSR ≥ 0.95 | Not re-run — still underpowered below 200 trades |
+| Live Sharpe within 25% of backtest | ✅ daily Sharpe +0.472 vs 0.060 floor (~8x) |
+| Live PF ≥ 1.05 | ✅ PF 2.15 |
+| Edge significance | ✅ mean R +0.555, t=+4.47 (significant at 5%) |
+| Max drawdown | ✅ 1.64% (vs 10% budget) |
+
+**Under-risk note**: the system actually runs ~0.173% risk/trade (not the configured 0.35%,
+which Kelly caps to 0.088% then the 1-unit gold floor lifts to ~0.17%). This is a deliberate
+risk-budget property, NOT a bug — risk sizing is scale-invariant and does not change the edge.
+Decision: keep sizing as-is until the 200-trade DSR gate; revisit lifting
+`kelly_max_fraction`/risk after it passes. Full reasoning in the Performance Assessment doc.

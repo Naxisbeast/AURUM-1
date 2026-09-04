@@ -1,6 +1,6 @@
 # AURUM-1 Strategy Documentation
 
-**Last updated**: 2026-07-21 (Hardening v1.0 complete)
+**Last updated**: 2026-09-04 (perf assessment — under-risk note added)
 
 ## Overview
 
@@ -103,8 +103,8 @@ stop_loss   = entry_price ∓ 2 × ATR
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| Risk per trade | **0.35%** of equity (bumped from 0.25% after 50-trade gate, 2026-08-05) | Risk sensitivity: median DD 11.9%, 99th DD 20.3%, 1.2% chance >20% DD |
-| Kelly fraction | 0.25 | Ensures conservative sizing |
+| Risk per trade | **0.35% configured** (bumped from 0.25% after 50-trade gate, 2026-08-05); actual deployed ~0.17% | Risk sensitivity: median DD 11.9%, 99th DD 20.3%, 1.2% chance >20% DD |
+| Kelly fraction | 0.25 | Ensures conservative sizing — caps the 0.35% to 0.088% intent before the 1-unit floor lifts actual to ~0.17%. See `docs/PERFORMANCE_ASSESSMENT_2026-09-04.md` |
 | Fixed 2R exit | TP=+2R, SL=-1R | Backtested across 8,175 trades |
 | Maximum positions | 1 | Donchian breakout — sequential entries only |
 | Max spread | 3.0 pips | Filters out high-cost entries |
