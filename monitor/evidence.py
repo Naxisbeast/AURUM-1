@@ -1,8 +1,11 @@
 """Evidence collection tracker for AURUM-1 Phase 4.
 
-Monitors D4's progress toward key decision gates:
-  - 50 trades: risk review (consider 0.50%?)
-  - 100 trades: strategy review
+Monitors D4's progress toward the decision gates. Historical gates:
+  - 50 trades: risk review  — ✅ PASSED 2026-08-05 (stayed at 0.35%)
+  - 100 trades: strategy review — ✅ RUN 2026-08-16 (2/3 criteria passed)
+Active gate:
+  - 200 trades: DSR becomes statistically meaningful (criterion 1 of the
+    100-trade gate extends here per pre-registration)
 
 Provides projections, drawdown monitoring, and automated reports.
 """
@@ -23,9 +26,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Decision gates
 # ---------------------------------------------------------------------------
+# 50 and 100 gates are historical (both reached). 200 is the active collection
+# target — DSR (criterion 1) needs the fuller trial/trade pool to be meaningful.
 
 RISK_REVIEW_TRADES = 50
 STRATEGY_REVIEW_TRADES = 100
+DSR_REVIEW_TRADES = 200              # active target: DSR gate
 RISK_REVIEW_CANDIDATE_PCT = 0.0050  # 0.50% potential next step
 TRADE_RATE_HISTORY_DAYS = 14        # window for trade rate projection
 
@@ -42,8 +48,9 @@ class EvidenceReport:
     # Trade counts
     total_trades: int
     trades_at_new_risk: int         # trades since 0.35% deploy
-    trades_remaining_to_50: int
-    trades_remaining_to_100: int
+    trades_remaining_to_50: int     # historical gate (reached) — kept for record
+    trades_remaining_to_100: int    # historical gate (reached) — kept for record
+    trades_remaining_to_200: int    # active gate: DSR
 
     # Performance since deploy
     pnl_since_deploy: float
@@ -65,6 +72,7 @@ class EvidenceReport:
     # Projections
     projected_days_to_50: float
     projected_days_to_100: float
+    projected_days_to_200: float
     trade_rate_per_day: float
 
     # Kill switch status
@@ -88,8 +96,9 @@ class EvidenceReport:
     r_distribution: dict[str, int] = field(default_factory=dict)
 
     # Flags
-    risk_review_due: bool = False
-    strategy_review_due: bool = False
+    risk_review_due: bool = False        # historical (50) — kept for record
+    strategy_review_due: bool = False    # historical (100) — kept for record
+    dsr_review_due: bool = False         # active gate (200)
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +153,10 @@ class EvidenceCollector:
         # Projections
         trades_needed_50 = max(0, RISK_REVIEW_TRADES - total)
         trades_needed_100 = max(0, STRATEGY_REVIEW_TRADES - total)
+        trades_needed_200 = max(0, DSR_REVIEW_TRADES - total)
         days_to_50 = trades_needed_50 / trade_rate if trade_rate > 0 else float("inf")
         days_to_100 = trades_needed_100 / trade_rate if trade_rate > 0 else float("inf")
+        days_to_200 = trades_needed_200 / trade_rate if trade_rate > 0 else float("inf")
 
         # Health metrics
         health = self._load_health()
@@ -183,6 +194,7 @@ class EvidenceCollector:
             trades_at_new_risk=len(trades_after),
             trades_remaining_to_50=trades_needed_50,
             trades_remaining_to_100=trades_needed_100,
+            trades_remaining_to_200=trades_needed_200,
             pnl_since_deploy=round(deploy_pnl, 2),
             r_since_deploy=round(deploy_r, 4),
             win_rate_since_deploy=round((deploy_wins / max(len(trades_after), 1)) * 100, 1),
@@ -196,6 +208,7 @@ class EvidenceCollector:
             max_dd_since_deploy=round(max_dd_deploy, 2),
             projected_days_to_50=round(days_to_50, 1),
             projected_days_to_100=round(days_to_100, 1),
+            projected_days_to_200=round(days_to_200, 1),
             trade_rate_per_day=round(trade_rate, 2),
             daily_kill_active=daily_kill,
             drawdown_kill_active=dd_kill,
@@ -211,6 +224,7 @@ class EvidenceCollector:
             r_distribution=r_dist,
             risk_review_due=total >= RISK_REVIEW_TRADES,
             strategy_review_due=total >= STRATEGY_REVIEW_TRADES,
+            dsr_review_due=total >= DSR_REVIEW_TRADES,
         )
 
     def format_report(self, report: EvidenceReport | None = None) -> str:
@@ -232,8 +246,9 @@ class EvidenceCollector:
             f"  {'--- TRADE PROGRESS ---':>45s}",
             f"  Total trades:        {r.total_trades:3d}",
             f"  Since 0.35% deploy:  {r.trades_at_new_risk:3d}",
-            f"  To 50-trade gate:    {r.trades_remaining_to_50:3d}  (projected {r.projected_days_to_50:.0f} days)",
-            f"  To 100-trade gate:   {r.trades_remaining_to_100:3d}  (projected {r.projected_days_to_100:.0f} days)",
+            f"  50-gate (done):      {'PASSED' if r.risk_review_due else f'{r.trades_remaining_to_50:3d} remaining'}",
+            f"  100-gate (done):     {'PASSED' if r.strategy_review_due else f'{r.trades_remaining_to_100:3d} remaining'}",
+            f"  To 200-trade DSR:    {r.trades_remaining_to_200:3d}  (projected {r.projected_days_to_200:.0f} days)",
             f"  Trade rate:          {r.trade_rate_per_day:.2f}/day",
             "",
             f"  {'--- PERFORMANCE ---':>40s}",
@@ -255,22 +270,18 @@ class EvidenceCollector:
             f"  {'--- DECISION GATES ---':>35s}",
         ]
 
-        if r.risk_review_due:
-            lines.extend([
-                f"  ** RISK REVIEW DUE ** — {r.total_trades} trades accumulated",
-                f"  Consider: bump to {RISK_REVIEW_CANDIDATE_PCT*100:.2f}% risk?",
-                f"  Current DD ({r.total_drawdown_pct:.2f}%) vs 0.50% projected median DD ~22.8%",
-            ])
-        else:
-            lines.append(f"  Risk review at 50 trades:  {r.trades_remaining_to_50} remaining")
+        lines.append(f"  50-trade risk review:  {'PASSED (2026-08-05)' if r.risk_review_due else f'{r.trades_remaining_to_50} remaining'}")
+        lines.append(f"  100-trade strategy review: {'PASSED (2026-08-16)' if r.strategy_review_due else f'{r.trades_remaining_to_100} remaining'}")
 
-        if r.strategy_review_due:
+        if r.dsr_review_due:
             lines.extend([
-                f"  ** STRATEGY REVIEW DUE ** — {r.total_trades} trades accumulated",
-                f"  Time to evaluate D4's live performance vs 11-year backtest expectations",
+                f"  ** 200-TRADE DSR GATE REACHED ** — {r.total_trades} trades accumulated",
+                f"  Run the DSR gate: scripts/gates/run_100_trade_gate.py against a fresh DB snapshot",
+                f"  If DSR still below threshold, per pre-registration: demote D4 to shadow-only.",
             ])
         else:
-            lines.append(f"  Strategy review at 100 trades: {r.trades_remaining_to_100} remaining")
+            lines.append(f"  Active: 200-trade DSR gate:  {r.trades_remaining_to_200} remaining "
+                         f"(projected {r.projected_days_to_200:.0f} days)")
 
         lines.extend([
             "",
@@ -419,6 +430,6 @@ def print_evidence_report(root_path: str | Path | None = None) -> None:
 
 __all__ = [
     "EvidenceCollector", "EvidenceReport",
-    "RISK_REVIEW_TRADES", "STRATEGY_REVIEW_TRADES",
+    "RISK_REVIEW_TRADES", "STRATEGY_REVIEW_TRADES", "DSR_REVIEW_TRADES",
     "print_evidence_report",
 ]

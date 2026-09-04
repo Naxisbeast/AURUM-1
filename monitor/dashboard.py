@@ -69,23 +69,22 @@ def render_evidence_progress() -> None:
         st.info("Evidence collection data not available yet.")
         return
 
-    pct_to_50 = min(100.0, (report.total_trades / 50) * 100)
-    pct_to_100 = min(100.0, (report.total_trades / 100) * 100)
+    # Active gate is the 200-trade DSR gate; 50 and 100 are historical (passed).
+    pct_to_200 = min(100.0, (report.total_trades / 200) * 100)
 
     st.subheader("Evidence Collection Progress")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Trades", str(report.total_trades))
     col2.metric("Since 0.35%", str(report.trades_at_new_risk))
-    col3.metric("Risk Review Gate", f"{report.trades_remaining_to_50} left", f"{pct_to_50:.0f}%")
-    col4.metric("Strategy Gate", f"{report.trades_remaining_to_100} left", f"{pct_to_100:.0f}%")
+    col3.metric("50-gate", "PASSED" if report.risk_review_due else f"{report.trades_remaining_to_50} left")
+    col4.metric("100-gate", "PASSED" if report.strategy_review_due else f"{report.trades_remaining_to_100} left")
     col5.metric("Trade Rate", f"{report.trade_rate_per_day:.1f}/d")
 
-    st.progress(pct_to_50 / 100.0, text=f"Progress to 50-trade risk review: {report.total_trades}/50")
+    st.progress(pct_to_200 / 100.0, text=f"Progress to 200-trade DSR gate: {report.total_trades}/200 "
+                                        f"({report.trades_remaining_to_200} left)")
 
-    if report.risk_review_due:
-        st.success("50 trades reached — risk review due! Consider 0.50% risk review.")
-    if report.strategy_review_due:
-        st.success("100 trades reached — strategy review due!")
+    if report.dsr_review_due:
+        st.success("200 trades reached — DSR gate due! Run run_100_trade_gate.py against a fresh DB snapshot.")
 
 
 def render_status_bar(status: dict[str, Any]) -> None:

@@ -12,6 +12,7 @@ from monitor.evidence import (
     EvidenceCollector,
     RISK_REVIEW_TRADES,
     STRATEGY_REVIEW_TRADES,
+    DSR_REVIEW_TRADES,
 )
 
 
@@ -88,6 +89,12 @@ class TestEvidenceCollector:
         assert report.trades_remaining_to_100 == 70
         assert not report.strategy_review_due
 
+    def test_trades_to_200_gate(self):
+        collector = self._make_collector(30)
+        report = collector.generate_report()
+        assert report.trades_remaining_to_200 == 170
+        assert not report.dsr_review_due
+
     def test_risk_review_triggers(self):
         collector = self._make_collector(50)
         report = collector.generate_report()
@@ -97,6 +104,15 @@ class TestEvidenceCollector:
         collector = self._make_collector(100)
         report = collector.generate_report()
         assert report.strategy_review_due
+
+    def test_dsr_review_triggers_at_200(self):
+        collector = self._make_collector(200)
+        report = collector.generate_report()
+        assert report.dsr_review_due
+        assert report.trades_remaining_to_200 == 0
+
+    def test_200_gate_constant(self):
+        assert DSR_REVIEW_TRADES == 200
 
     def test_report_formatted(self):
         collector = self._make_collector(5)
