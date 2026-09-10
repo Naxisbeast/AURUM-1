@@ -247,31 +247,24 @@ class D4PaperTrader:
                     self.execution.broker._trade_history.append(trade)
 
                 # 2. Restore last known equity from most recent snapshot.
-                # Daily P&L is only restored if the snapshot is from the current
-                # UTC day — otherwise it must start at zero (a restarted process
-                # must not inherit yesterday's accumulated P&L as "today's").
+                # Daily P&L is DERIVED from today's closed trades rather than
+                # trusted from the snapshot: snapshots written before the
+                # 2026-09-10 fix carry a corrupted all-time accumulator, and
+                # deriving is self-correcting either way.
                 snap = conn.execute(
-                    "SELECT equity, balance, peak_equity, daily_pnl, timestamp "
-                    "FROM account_snapshots ORDER BY id DESC LIMIT 1"
+                    "SELECT equity, balance, peak_equity FROM account_snapshots "
+                    "ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 if snap is not None:
                     self.execution.broker._equity = float(snap[0])
                     self.execution.broker._balance = float(snap[1])
                     self.execution.broker._peak_equity_30d = float(snap[2])
-                    snap_day = None
-                    if snap[4]:
-                        try:
-                            snap_dt = datetime.fromisoformat(str(snap[4]).replace("Z", "+00:00"))
-                            if snap_dt.tzinfo is None:
-                                snap_dt = snap_dt.replace(tzinfo=UTC)
-                            snap_day = snap_dt.astimezone(UTC).date()
-                        except (ValueError, TypeError):
-                            snap_day = None
                     today = datetime.now(UTC).date()
-                    if snap_day == today:
-                        self.execution.broker._daily_pnl = float(snap[3])
-                    else:
-                        self.execution.broker._daily_pnl = 0.0
+                    today_pnl = conn.execute(
+                        "SELECT COALESCE(SUM(net_pnl), 0) FROM trades "
+                        "WHERE exit_time IS NOT NULL AND date(exit_time) = date('now')"
+                    ).fetchone()
+                    self.execution.broker._daily_pnl = float(today_pnl[0]) if today_pnl else 0.0
                     self.execution.broker._daily_pnl_date = today
                     self._last_trade_count = len(self.execution.broker._trade_history)
 
