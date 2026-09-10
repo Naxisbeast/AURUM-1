@@ -547,3 +547,56 @@ class TestPriceCollar:
         order = _risk_order(_buy_instruction(entry=100.0))
         result = broker.submit_order(order)
         assert result.success
+
+
+class TestDailyPnlRollover:
+    """_daily_pnl must reset at the UTC day boundary.
+
+    Regression guard: it previously accumulated for the life of the process,
+    which silently disabled the daily-loss kill switch (risk manager + watchdog)
+    because the accumulator would need a loss exceeding all prior profit to trip.
+    """
+
+    def test_daily_pnl_resets_on_new_day(self):
+        from datetime import timedelta
+
+        broker = PaperBroker(_settings())
+        broker._daily_pnl = 500.0
+        day1 = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+        broker.update_prices(_candle(timestamp=day1))
+        assert broker._daily_pnl == 500.0  # baseline day: unchanged
+
+        broker._daily_pnl = 500.0
+        broker.update_prices(_candle(timestamp=day1 + timedelta(hours=2)))
+        assert broker._daily_pnl == 500.0  # same day: unchanged
+
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 11, 0, 15, tzinfo=UTC)))
+        assert broker._daily_pnl == 0.0  # new UTC day: reset
+
+    def test_daily_pnl_reset_reflected_in_account_state(self):
+        from datetime import timedelta
+
+        broker = PaperBroker(_settings())
+        broker._daily_pnl = -250.0
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 10, 23, 45, tzinfo=UTC)))
+        assert broker.get_account_state().daily_pnl == -250.0
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 11, 0, 0, tzinfo=UTC)))
+        assert broker.get_account_state().daily_pnl == 0.0
+
+    def test_first_candle_without_prior_day_does_not_reset(self):
+        """A process starting mid-day must not zero a restored daily P&L."""
+        broker = PaperBroker(_settings())
+        broker._daily_pnl = -300.0
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 10, 14, 0, tzinfo=UTC)))
+        assert broker._daily_pnl == -300.0
+
+    def test_daily_pnl_rolls_at_utc_midnight_not_local(self):
+        """Boundary is UTC — 00:01 UTC is a new day regardless of local tz."""
+        from datetime import timedelta
+
+        broker = PaperBroker(_settings())
+        broker._daily_pnl = 100.0
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 10, 23, 59, tzinfo=UTC)))
+        assert broker._daily_pnl == 100.0
+        broker.update_prices(_candle(timestamp=datetime(2026, 9, 10, 23, 59, tzinfo=UTC) + timedelta(minutes=2)))
+        assert broker._daily_pnl == 0.0

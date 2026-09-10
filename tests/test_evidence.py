@@ -122,6 +122,50 @@ class TestEvidenceCollector:
         assert "0.35%" in text  # risk setting
         assert "DECISION GATES" in text
 
+    def test_health_field_names_match_writer(self):
+        """uptime and candle-age must read the keys the health file writes.
+
+        Regression guard: evidence.py read `uptime_hours` and
+        `latest_candle_age_minutes`, but the health file writes `uptime_seconds`
+        and `market_latest_candle_age_minutes` — both silently yielded 0/None,
+        so uptime always showed 0 and stale-data detection never fired.
+        """
+        import json
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "run").mkdir(parents=True, exist_ok=True)
+        (tmp / "aurum1" / "data").mkdir(parents=True, exist_ok=True)
+        (tmp / "run" / "d4_paper_trader_health.json").write_text(json.dumps({
+            "equity": 12017.73,
+            "peak_equity": 12017.73,
+            "drawdown_pct": 0.0,
+            "uptime_seconds": 828000.0,          # 230h
+            "market_latest_candle_age_minutes": 5.0,
+            "daily_pnl": 0.0,
+        }))
+        collector = EvidenceCollector(tmp)
+        collector.paper_db = tmp / "aurum1" / "data" / "paper_trading.sqlite3"
+        report = collector.generate_report()
+        assert report.uptime_hours > 200, "uptime_hours should be derived from uptime_seconds"
+        assert report.stale_data is False  # 5 min < 120 threshold
+        assert report.current_equity == 12017.73
+
+    def test_stale_data_detected_from_health(self):
+        """When the candle age exceeds the threshold, stale_data must be True."""
+        import json
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "run").mkdir(parents=True, exist_ok=True)
+        (tmp / "aurum1" / "data").mkdir(parents=True, exist_ok=True)
+        (tmp / "run" / "d4_paper_trader_health.json").write_text(json.dumps({
+            "equity": 10000.0, "peak_equity": 10000.0, "drawdown_pct": 0.0,
+            "uptime_seconds": 3600.0,
+            "market_latest_candle_age_minutes": 300.0,  # 5h > 120 min
+            "daily_pnl": 0.0,
+        }))
+        collector = EvidenceCollector(tmp)
+        collector.paper_db = tmp / "aurum1" / "data" / "paper_trading.sqlite3"
+        report = collector.generate_report()
+        assert report.stale_data is True
+
     def test_trades_since_deploy(self):
         tmp = Path(tempfile.mkdtemp())
         db_path = tmp / "aurum1" / "data" / "paper_trading.sqlite3"

@@ -7,7 +7,7 @@ import random
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -96,6 +96,9 @@ class PaperBroker(BrokerBase):
         self._positions: dict[str, PositionRecord] = {}
         self._trade_history: list[dict[str, Any]] = []
         self._daily_pnl = 0.0
+        # UTC date the current _daily_pnl accumulator belongs to. Rolls the
+        # daily P&L back to zero when a candle crosses into a new day.
+        self._daily_pnl_date: date | None = None
         self._peak_equity_30d = initial_equity
         self._candle_prices: deque[float] = deque(maxlen=500)
         seed = int(settings.get("general", {}).get("random_seed", settings.get("app", {}).get("random_seed", 42)))
@@ -200,6 +203,7 @@ class PaperBroker(BrokerBase):
         return self._close_position_at_price(position_id, position.current_price, reason)
 
     def update_prices(self, candle: CandleRow) -> None:
+        self._roll_daily_pnl_if_new_day(candle.timestamp)
         self._candle_prices.append(float(candle.close))
         close_queue: list[tuple[str, float, str]] = []
         for position_id, position in list(self._positions.items()):
@@ -286,6 +290,33 @@ class PaperBroker(BrokerBase):
         if not self._candle_prices:
             return None
         return float(self._candle_prices[-1])
+
+    def _roll_daily_pnl_if_new_day(self, candle_ts: Any) -> None:
+        """Reset the daily P&L accumulator when a candle enters a new UTC day.
+
+        `_daily_pnl` feeds the daily-loss kill switch (risk manager + watchdog).
+        Without this rollover it accumulates for the life of the process, which
+        silently disables the daily-loss kill (it would take a loss larger than
+        all prior profit to trip). Called on every candle via update_prices.
+        """
+        try:
+            ts = candle_ts
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if not isinstance(ts, datetime):
+                return
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            candle_date = ts.astimezone(UTC).date()
+        except (ValueError, TypeError, AttributeError):
+            return
+        if self._daily_pnl_date is None:
+            # First candle seen: establish the baseline day, keep P&L as-is.
+            self._daily_pnl_date = candle_date
+            return
+        if candle_date != self._daily_pnl_date:
+            self._daily_pnl = 0.0
+            self._daily_pnl_date = candle_date
 
     def _close_position_at_price(self, position_id: str, close_price: float, reason: str) -> OrderResult:
         position = self._positions.pop(position_id)

@@ -246,16 +246,33 @@ class D4PaperTrader:
                     self.trades.append(trade)
                     self.execution.broker._trade_history.append(trade)
 
-                # 2. Restore last known equity from most recent snapshot
+                # 2. Restore last known equity from most recent snapshot.
+                # Daily P&L is only restored if the snapshot is from the current
+                # UTC day — otherwise it must start at zero (a restarted process
+                # must not inherit yesterday's accumulated P&L as "today's").
                 snap = conn.execute(
-                    "SELECT equity, balance, peak_equity, daily_pnl FROM account_snapshots "
-                    "ORDER BY id DESC LIMIT 1"
+                    "SELECT equity, balance, peak_equity, daily_pnl, timestamp "
+                    "FROM account_snapshots ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 if snap is not None:
                     self.execution.broker._equity = float(snap[0])
                     self.execution.broker._balance = float(snap[1])
                     self.execution.broker._peak_equity_30d = float(snap[2])
-                    self.execution.broker._daily_pnl = float(snap[3])
+                    snap_day = None
+                    if snap[4]:
+                        try:
+                            snap_dt = datetime.fromisoformat(str(snap[4]).replace("Z", "+00:00"))
+                            if snap_dt.tzinfo is None:
+                                snap_dt = snap_dt.replace(tzinfo=UTC)
+                            snap_day = snap_dt.astimezone(UTC).date()
+                        except (ValueError, TypeError):
+                            snap_day = None
+                    today = datetime.now(UTC).date()
+                    if snap_day == today:
+                        self.execution.broker._daily_pnl = float(snap[3])
+                    else:
+                        self.execution.broker._daily_pnl = 0.0
+                    self.execution.broker._daily_pnl_date = today
                     self._last_trade_count = len(self.execution.broker._trade_history)
 
                 # 3. Restore last_processed_ts from settings table
@@ -636,6 +653,10 @@ class D4PaperTrader:
         if (direction == "BUY" and stop_loss >= entry_price) or (direction == "SELL" and stop_loss <= entry_price):
             return
 
+        # A breakout signal was detected — count it. Note this happens before the
+        # risk manager runs, so "seen" includes signals later rejected/skipped.
+        self._signals_seen += 1
+
         # Risk distance from entry price (PaperBroker adds Gaussian slippage on fill)
         # 2R exit: TP at +2x risk distance, SL at -1x risk distance
         raw_entry = float(row["open"])
@@ -647,7 +668,6 @@ class D4PaperTrader:
         account = self.execution.broker.get_account_state()
         current_spread = account.current_spread_pips
         self._spread_history.append(current_spread)
-        self._signals_seen += 0  # already incremented above, this is a no-op placeholder
 
         instruction = TradeInstruction(
             timestamp=ts.to_pydatetime(), direction=direction, entry_price=entry_price,

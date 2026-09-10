@@ -158,14 +158,16 @@ class EvidenceCollector:
         days_to_100 = trades_needed_100 / trade_rate if trade_rate > 0 else float("inf")
         days_to_200 = trades_needed_200 / trade_rate if trade_rate > 0 else float("inf")
 
-        # Health metrics
+        # Health metrics. Field names must match what the D4 health file writes
+        # (see d4_paper_trader._write_health_file): uptime_seconds and
+        # market_latest_candle_age_minutes. A mismatch here silently yields 0.
         health = self._load_health()
         equity = float(health.get("equity", 0))
         peak = float(health.get("peak_equity", equity))
         dd_pct = float(health.get("drawdown_pct", 0))
-        uptime = float(health.get("uptime_hours", 0))
-        candle_age = health.get("latest_candle_age_minutes")
-        stale = candle_age is not None and candle_age > 120 if candle_age is not None else False
+        uptime = float(health.get("uptime_seconds", 0)) / 3600.0
+        candle_age = health.get("market_latest_candle_age_minutes")
+        stale = bool(candle_age is not None and candle_age > 120)
 
         # Account snapshots for max DD since deploy
         max_dd_deploy = self._max_drawdown_since_deploy()
