@@ -14,6 +14,12 @@
 | ML Retrain | ❌ **DISABLED** | Timer exists but models are unused in production |
 | Main Orchestrator | ❌ **STOPPED** | Last run May 27 2026. D4 replaced it. |
 
+> **2026-09-10 — metric bugs fixed**: the daily-loss kill switch had been silently disabled
+> (`_daily_pnl` never reset at the UTC day boundary, so it held all-time P&L and could never
+> trip); `signals_seen` was a permanent 0; and the evidence tracker read two health-field
+> names that do not exist. All fixed + regression tests added. See
+> `docs/system/METRIC_BUGS_2026-09-10.md`.
+
 ## 2026-08-28 Maintenance — Deploy Gap + Weekly Report Fix
 
 **Symptom**: `aurum1-d4-shadow.service` failing every 15 min (2,353 failures since Aug 1);
