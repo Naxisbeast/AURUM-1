@@ -1,6 +1,6 @@
 # AURUM-1 System Status
 
-**Last updated**: 2026-09-04
+**Last updated**: 2026-09-28
 
 ## Operational Status
 
@@ -19,6 +19,14 @@
 > trip); `signals_seen` was a permanent 0; and the evidence tracker read two health-field
 > names that do not exist. All fixed + regression tests added. See
 > `docs/system/METRIC_BUGS_2026-09-10.md`.
+
+> **2026-09-28 — disk-full outage resolved**: the server volume hit 100% (0 bytes free)
+> because `backup_forward_shadow_db.sh` created a daily backup with no retention (133
+> backups / 19 GB). Everything needing to write failed: forward-shadow crash-looped with
+> `sqlite3.OperationalError: disk I/O error`, and the dashboard showed no data. Freed
+> ~21 GB (pruned to newest 28 backups + OS caches) and added retention to the backup
+> script. All services recovered; no data lost. See
+> `docs/system/DISK_FULL_INCIDENT_2026-09-28.md`.
 
 ## 2026-08-28 Maintenance — Deploy Gap + Weekly Report Fix
 
