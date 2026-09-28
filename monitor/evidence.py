@@ -116,7 +116,18 @@ class EvidenceCollector:
 
     def __init__(self, root_path: str | Path, deploy_time: datetime | None = None):
         self.root = Path(root_path)
+        # Trading-record DB: honors settings.yaml paper_trading.db_path so the
+        # evidence tracker follows the trader to the OANDA practice record.
         self.paper_db = self.root / "aurum1" / "data" / "paper_trading.sqlite3"
+        try:
+            import yaml
+            cfg = yaml.safe_load((self.root / "aurum1" / "config" / "settings.yaml").read_text(encoding="utf-8"))
+            pt = (cfg or {}).get("paper_trading", {}) if isinstance(cfg, dict) else {}
+            if pt.get("db_path"):
+                p = Path(str(pt["db_path"]))
+                self.paper_db = p if p.is_absolute() else (self.root / p)
+        except Exception:
+            pass
         self.health_file = self.root / "run" / "d4_paper_trader_health.json"
         self.settings_file = self.root / "aurum1" / "config" / "settings.yaml"
         # Deploy time for 0.35% risk (default: last restart)

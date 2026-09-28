@@ -13,8 +13,23 @@ import numpy as np
 import pandas as pd
 
 
+def resolve_trading_db(db_path: str | Path, settings: dict | None = None) -> Path:
+    """Trading-record DB path (paper_trading.sqlite3 or the OANDA practice record).
 
-def load_equity_curve(db_path: str) -> pd.DataFrame:
+    Honors settings['paper_trading']['db_path'] when set (e.g. the OANDA practice
+    DB), so the dashboard can follow the trader from paper to a real demo account.
+    Relative paths resolve against the process working directory (server runs from
+    /opt/aurum1).
+    """
+    if settings:
+        pt = settings.get("paper_trading", {})
+        if pt.get("db_path"):
+            p = Path(str(pt["db_path"]))
+            return p if p.is_absolute() else (Path.cwd() / p)
+    return Path(db_path).parent / "paper_trading.sqlite3"
+
+
+def load_equity_curve(db_path: str, settings: dict | None = None) -> pd.DataFrame:
     """Load timestamp/equity rows from performance_log, falling back to paper_trading account_snapshots."""
 
     path = Path(db_path)
@@ -43,8 +58,8 @@ def load_equity_curve(db_path: str) -> pd.DataFrame:
                 frame = frame.dropna(subset=["timestamp", "equity"])
                 return frame.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
 
-    # Fallback: paper_trading account_snapshots (D4 paper trader)
-    paper_db = path.parent / "paper_trading.sqlite3"
+    # Fallback: trading-record account_snapshots (D4 paper trader / OANDA practice)
+    paper_db = resolve_trading_db(path, settings)
     if paper_db.exists():
         with closing(sqlite3.connect(paper_db)) as conn:
             try:
@@ -152,8 +167,8 @@ def get_system_status(
     peak_equity = equity
     spread = float(settings.get("execution", {}).get("paper_spread_pips", 0.0))
 
-    # Try reading from paper_trading account_snapshots first (avoids mutating broker state)
-    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    # Try reading from the trading-record account_snapshots first (avoids mutating broker state)
+    paper_db = resolve_trading_db(db_path, settings)
     if paper_db.exists():
         with closing(sqlite3.connect(paper_db)) as conn:
             try:
@@ -440,10 +455,10 @@ def compute_r_distribution(trades: pd.DataFrame) -> dict[str, Any]:
 # System health metrics
 # ---------------------------------------------------------------------------
 
-def load_system_health(db_path: str) -> dict[str, Any]:
-    """Load system health indicators from the health file and paper DB.
+def load_system_health(db_path: str, settings: dict | None = None) -> dict[str, Any]:
+    """Load system health indicators from the health file and trading DB.
 
-    Reads the D4 paper trader health JSON and falls back to paper_trading DB.
+    Reads the D4 paper trader health JSON and falls back to the trading-record DB.
     Health file is at repo_root/run/d4_paper_trader_health.json (4 levels up
     from aurum1/data/aurum1.sqlite3 or 3 levels up from whatever db_path is).
     Returns a dict suitable for dashboard display.
@@ -492,8 +507,8 @@ def load_system_health(db_path: str) -> dict[str, Any]:
         except (json.JSONDecodeError, KeyError, OSError):
             pass
 
-    # Fallback: read from paper_trading DB
-    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    # Fallback: read from the trading-record DB
+    paper_db = resolve_trading_db(db_path, settings)
     if paper_db.exists():
         try:
             with closing(sqlite3.connect(paper_db)) as conn:

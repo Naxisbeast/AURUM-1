@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse, json, math, os, signal, sqlite3, sys, threading, time
 from collections import Counter
 from contextlib import closing
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ from aurum1.data.ingestion import load_ohlcv, load_settings
 from aurum1.execution import ExecutionEngine
 from aurum1.execution.broker import PositionRecord
 from aurum1.instruments import InstrumentSpec
-from aurum1.risk import RiskManager
+from aurum1.risk import AccountState, RiskManager
 from aurum1.signals import CandleRow, TradeInstruction
 from scripts.research.research_edge_prototypes import build_research_features
 
@@ -49,7 +49,12 @@ class D4PaperTrader:
 
     def __init__(self, settings: dict[str, Any]):
         self.settings = settings
-        self.market_db = MARKET_DB
+        # Paths are settings-injectable (defaults as before) so tests can point
+        # at temp files and the OANDA practice mode can use its own DB.
+        pt = settings.get("paper_trading", {})
+        self._paper_db = Path(pt.get("db_path", ROOT / "aurum1" / "data" / "paper_trading.sqlite3"))
+        self.market_db = Path(pt.get("market_db_path", MARKET_DB))
+        self.health_file = Path(pt.get("health_file", HEALTH_FILE))
         self.spec = InstrumentSpec.from_settings(settings)
         # NOTE: Slippage and spread are handled by PaperBroker (in the broker
         # module) using Gaussian slippage and session-aware spread estimation.
@@ -78,8 +83,12 @@ class D4PaperTrader:
         self.last_signal_time = None
         self._last_processed_ts: pd.Timestamp | None = None
         self._prev_latest_ts: pd.Timestamp | None = None
-        self._last_trade_count = 0
-        self._paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
+        # Trader-owned open-position meta (position_id -> levels/risk). The
+        # broker-agnostic source for persistence and OANDA R reconstruction.
+        self._open_meta: dict[str, dict] = {}
+        self._daily_pnl = 0.0
+        self._daily_pnl_date: date | None = None
+        self._peak_equity_30d = 0.0
         self._last_data_ts = datetime.now(UTC)
         self._stale_warning_logged = False
         self._snapshot_counter = 0
@@ -92,15 +101,16 @@ class D4PaperTrader:
         self._refresh_data()
 
         # Write initial health file
-        self._write_health_file(account=self.execution.broker.get_account_state())
+        self._write_health_file(account=self._account_state())
 
-        account = self.execution.broker.get_account_state()
+        account = self._account_state()
+        broker_mode = "oanda (real OANDA practice/live account)" if self.execution.broker.server_managed_sl_tp else "paper (PaperBroker handles SL/TP natively)"
         print(f"D4 Paper Trader initialized")
         print(f"  Instrument: XAU/USD")
         print(f"  Market cache: {self.market_db}")
         print(f"  Strategy: Donchian 20, BUY+SELL, 2R exit")
         print(f"  Risk: {RISK_PCT*100:.2f}% per trade")
-        print(f"  Broker: paper (PaperBroker handles SL/TP natively)")
+        print(f"  Broker: {broker_mode}")
         print(f"  Restored equity: ${account.equity:.2f}")
         print(f"  Trade history: {len(self.trades)} trades")
 
@@ -137,6 +147,11 @@ class D4PaperTrader:
                     conn.execute(f"ALTER TABLE trades ADD COLUMN {col} TEXT")
                 except sqlite3.OperationalError:
                     pass  # column already exists
+            # Migrate: position_id (OANDA trade ID) for cross-restart dedup
+            try:
+                conn.execute("ALTER TABLE trades ADD COLUMN position_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS account_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,6 +195,12 @@ class D4PaperTrader:
                     created_at TEXT DEFAULT (datetime('now'))
                 )
             """)
+            # Migrate: risk_amount per open position (needed to reconstruct
+            # r_multiple for broker-detected closes after a restart).
+            try:
+                conn.execute("ALTER TABLE open_positions ADD COLUMN risk_amount REAL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # column already exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS missed_signals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,14 +229,14 @@ class D4PaperTrader:
                     rows = conn.execute(
                         "SELECT timestamp, entry_time, exit_time, direction, entry_price, "
                         "exit_price, stop_loss, take_profit, units, risk_amount, r_multiple, "
-                        "net_pnl, spread_cost, slippage_cost, exit_reason FROM trades "
+                        "net_pnl, spread_cost, slippage_cost, exit_reason, position_id FROM trades "
                         "ORDER BY id"
                     ).fetchall()
                 else:
                     rows = conn.execute(
                         "SELECT entry_time, exit_time, direction, entry_price, exit_price, "
                         "stop_loss, take_profit, units, risk_amount, r_multiple, net_pnl, "
-                        "spread_cost, slippage_cost, exit_reason FROM trades "
+                        "spread_cost, slippage_cost, exit_reason, position_id FROM trades "
                         "ORDER BY id"
                     ).fetchall()
                 # When has_old_timestamp, SELECT has a leading timestamp column
@@ -242,31 +263,32 @@ class D4PaperTrader:
                         "spread_cost": row[11 + off] or 0.0,
                         "total_slippage_cost": row[12 + off] or 0.0,
                         "reason": row[13 + off] or "",
+                        "position_id": row[14 + off] if len(row) > 14 + off else None,
                     }
                     self.trades.append(trade)
-                    self.execution.broker._trade_history.append(trade)
 
-                # 2. Restore last known equity from most recent snapshot.
+                # 2. Restore equity/peak/daily from most recent snapshot.
                 # Daily P&L is DERIVED from today's closed trades rather than
                 # trusted from the snapshot: snapshots written before the
                 # 2026-09-10 fix carry a corrupted all-time accumulator, and
-                # deriving is self-correcting either way.
+                # deriving is self-correcting either way. Equity/peak seed the
+                # paper broker (via restore_state_from_snapshot below); for a
+                # server-managed broker (OANDA) the platform is the source of
+                # truth and only daily P&L / peak are tracked trader-side.
                 snap = conn.execute(
                     "SELECT equity, balance, peak_equity FROM account_snapshots "
                     "ORDER BY id DESC LIMIT 1"
                 ).fetchone()
-                if snap is not None:
-                    self.execution.broker._equity = float(snap[0])
-                    self.execution.broker._balance = float(snap[1])
-                    self.execution.broker._peak_equity_30d = float(snap[2])
-                    today = datetime.now(UTC).date()
-                    today_pnl = conn.execute(
-                        "SELECT COALESCE(SUM(net_pnl), 0) FROM trades "
-                        "WHERE exit_time IS NOT NULL AND date(exit_time) = date('now')"
-                    ).fetchone()
-                    self.execution.broker._daily_pnl = float(today_pnl[0]) if today_pnl else 0.0
-                    self.execution.broker._daily_pnl_date = today
-                    self._last_trade_count = len(self.execution.broker._trade_history)
+                snap_equity = float(snap[0]) if snap is not None else float(
+                    self.settings.get("broker", {}).get("paper_initial_equity", 10000.0))
+                snap_balance = float(snap[1]) if snap is not None else snap_equity
+                self._peak_equity_30d = float(snap[2]) if snap is not None else snap_equity
+                self._daily_pnl_date = datetime.now(UTC).date()
+                today_pnl = conn.execute(
+                    "SELECT COALESCE(SUM(net_pnl), 0) FROM trades "
+                    "WHERE exit_time IS NOT NULL AND date(exit_time) = date('now')"
+                ).fetchone()
+                self._daily_pnl = float(today_pnl[0]) if today_pnl else 0.0
 
                 # 3. Restore last_processed_ts from settings table
                 last_ts = conn.execute(
@@ -290,15 +312,31 @@ class D4PaperTrader:
                     })
                     self._missed_signals += 1
 
-                # 5. Restore open positions into PaperBroker
+                # 3. Restore open positions: build open-meta (levels/risk) for
+                # broker-agnostic closes and PositionRecords for the paper broker.
                 open_rows = conn.execute(
                     "SELECT position_id, direction, entry_price, current_price, stop_loss, "
                     "take_profit, units, lot_size, intended_entry_price, entry_slippage, "
-                    "entry_slippage_cost, open_time FROM open_positions ORDER BY id"
+                    "entry_slippage_cost, open_time, risk_amount FROM open_positions ORDER BY id"
                 ).fetchall()
+                restored_positions: list[PositionRecord] = []
                 for row in open_rows:
                     open_time = datetime.fromisoformat(row[11]) if row[11] else datetime.now(UTC)
-                    pos = PositionRecord(
+                    self._open_meta[row[0]] = {
+                        "position_id": row[0],
+                        "direction": row[1],
+                        "intended_entry": float(row[8]) if row[8] is not None else float(row[2]),
+                        "actual_entry": float(row[2]),
+                        "stop_loss": float(row[4]),
+                        "take_profit": float(row[5]),
+                        "units": float(row[6]),
+                        "lot_size": float(row[7]),
+                        "entry_slippage": float(row[9]) if row[9] is not None else 0.0,
+                        "entry_slippage_cost": float(row[10]) if row[10] is not None else 0.0,
+                        "risk_amount": float(row[12]) if len(row) > 12 and row[12] is not None else 0.0,
+                        "open_time": open_time,
+                    }
+                    restored_positions.append(PositionRecord(
                         position_id=row[0],
                         instrument="XAU_USD",
                         direction=row[1],
@@ -314,16 +352,55 @@ class D4PaperTrader:
                         open_time=open_time,
                         unrealised_pnl=0.0,
                         broker="paper",
-                    )
-                    self.execution.broker._positions[row[0]] = pos
+                    ))
                     print(f"  Restored open position: {row[1]} @ ${row[2]:.2f} SL=${row[4]:.2f} TP=${row[5]:.2f}")
+
+                # Seed broker-internal state (PaperBroker consumes; OandaBroker
+                # no-ops since the platform is the source of truth).
+                self.execution.broker.restore_state_from_snapshot({
+                    "equity": snap_equity,
+                    "balance": snap_balance,
+                    "peak_equity_30d": self._peak_equity_30d,
+                    "daily_pnl": self._daily_pnl,
+                    "daily_pnl_date": self._daily_pnl_date,
+                    "trade_history": self.trades,
+                    "positions": restored_positions,
+                })
         except Exception as exc:
             print(f"  State restore error: {exc}")
+
+    def _account_state(self) -> AccountState:
+        """Broker account state, merged with trader-side daily P&L / peak.
+
+        Server-managed brokers (OANDA) report daily_pnl=0.0 and peak=equity from
+        their summary endpoint, which would silently disable the daily-loss and
+        drawdown kill switches. For those, merge the trader's own daily P&L
+        (derived from today's closed trades) and tracked peak equity.
+        """
+        raw = self.execution.broker.get_account_state()
+        if not self.execution.broker.server_managed_sl_tp:
+            return raw
+        today = datetime.now(UTC).date().isoformat()
+        daily = sum(
+            float(t.get("net_pnl", 0.0))
+            for t in self.trades
+            if (t.get("closed_at") or "").startswith(today)
+        )
+        peak = max(raw.equity, self._peak_equity_30d)
+        return AccountState(
+            equity=raw.equity,
+            balance=raw.balance,
+            open_trade_count=raw.open_trade_count,
+            daily_pnl=daily,
+            peak_equity_30d=peak,
+            current_spread_pips=raw.current_spread_pips,
+            open_risk_pct=raw.open_risk_pct,
+        )
 
     def _save_snapshot(self):
         """Persist current account state to account_snapshots."""
         try:
-            account = self.execution.broker.get_account_state()
+            account = self._account_state()
             with closing(sqlite3.connect(str(self._paper_db))) as conn:
                 conn.execute("""
                     INSERT INTO account_snapshots
@@ -337,40 +414,47 @@ class D4PaperTrader:
                     round(account.peak_equity_30d, 2),
                     round(account.daily_pnl, 2),
                     account.open_trade_count,
-                    len(self.execution.broker._trade_history),
+                    len(self.trades),
                 ))
                 conn.commit()
         except Exception as exc:
             print(f"  Snapshot error: {exc}")
 
     def _save_open_positions(self):
-        """Persist any open positions to the DB so they survive restart."""
+        """Persist open positions (from trader-owned _open_meta) so they survive restart.
+
+        Broker-agnostic: both PaperBroker and OandaBroker feed the same _open_meta
+        keyed by position_id, so SL/TP and risk_amount survive a restart and an
+        OANDA close can be reconstructed with the correct r_multiple.
+        """
         try:
-            positions = self.execution.broker.get_open_positions()
             with closing(sqlite3.connect(str(self._paper_db))) as conn:
                 # Clear stale entries first
                 conn.execute("DELETE FROM open_positions")
-                for pos in positions:
+                for pid, meta in self._open_meta.items():
+                    intended_entry = meta.get("intended_entry")
+                    open_time = meta.get("open_time", datetime.now(UTC))
                     conn.execute("""
                         INSERT OR REPLACE INTO open_positions
                             (position_id, direction, entry_price, current_price,
                              stop_loss, take_profit, units, lot_size,
                              intended_entry_price, entry_slippage, entry_slippage_cost,
-                             open_time)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             risk_amount, open_time)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        pos.position_id,
-                        pos.direction,
-                        round(pos.open_price, 2),
-                        round(pos.current_price, 2),
-                        round(pos.stop_loss, 2),
-                        round(pos.take_profit, 2),
-                        round(pos.units, 4),
-                        round(pos.lot_size, 4),
-                        round(pos.intended_entry_price, 2) if pos.intended_entry_price is not None else None,
-                        round(pos.entry_slippage, 4),
-                        round(pos.entry_slippage_cost, 4),
-                        pos.open_time.isoformat() if hasattr(pos.open_time, "isoformat") else str(pos.open_time),
+                        pid,
+                        meta.get("direction", ""),
+                        round(float(meta.get("actual_entry", intended_entry or 0.0)), 2),
+                        round(float(meta.get("actual_entry", intended_entry or 0.0)), 2),
+                        round(float(meta.get("stop_loss", 0.0)), 2),
+                        round(float(meta.get("take_profit", 0.0)), 2),
+                        round(float(meta.get("units", 0.0)), 4),
+                        round(float(meta.get("lot_size", 0.0)), 4),
+                        round(float(intended_entry), 2) if intended_entry else None,
+                        round(float(meta.get("entry_slippage", 0.0)), 4),
+                        round(float(meta.get("entry_slippage_cost", 0.0)), 4),
+                        round(float(meta.get("risk_amount", 0.0)), 4),
+                        open_time.isoformat() if hasattr(open_time, "isoformat") else str(open_time),
                     ))
                 conn.commit()
         except Exception as exc:
@@ -423,7 +507,7 @@ class D4PaperTrader:
         """Write a lightweight JSON health file for external monitoring."""
         try:
             if account is None:
-                account = self.execution.broker.get_account_state()
+                account = self._account_state()
             positions = self.execution.broker.get_open_positions()
             avg_slip = sum(self._slippage_history[-100:]) / max(len(self._slippage_history[-100:]), 1)
             avg_exit_slip = sum(self._exit_slippage_history[-100:]) / max(len(self._exit_slippage_history[-100:]), 1)
@@ -440,7 +524,7 @@ class D4PaperTrader:
                 "balance": round(account.balance, 2),
                 "daily_pnl": round(account.daily_pnl, 2),
                 "open_positions": account.open_trade_count,
-                "trade_count": len(self.execution.broker._trade_history),
+                "trade_count": len(self.trades),
                 "signals_seen": self._signals_seen,
                 "missed_signals": self._missed_signals,
                 "missed_signal_reasons": self._missed_signal_report(),
@@ -452,8 +536,8 @@ class D4PaperTrader:
                 "max_latency_seconds": round(self._latency_max, 3),
                 "market_latest_candle_age_minutes": round((datetime.now(UTC) - self._last_data_ts).total_seconds() / 60.0, 1),
             }
-            HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-            HEALTH_FILE.write_text(json.dumps(health, indent=2, default=str))
+            self.health_file.parent.mkdir(parents=True, exist_ok=True)
+            self.health_file.write_text(json.dumps(health, indent=2, default=str))
         except Exception as exc:
             print(f"  Health file error (non-critical): {exc}")
 
@@ -522,8 +606,9 @@ class D4PaperTrader:
                         INSERT INTO trades
                             (timestamp, entry_time, exit_time, direction, entry_price,
                              exit_price, stop_loss, take_profit, units, risk_amount,
-                             r_multiple, net_pnl, spread_cost, slippage_cost, exit_reason)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             r_multiple, net_pnl, spread_cost, slippage_cost, exit_reason,
+                             position_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         entry_ts or exit_ts,  # populate old timestamp column
                         entry_ts,
@@ -539,15 +624,16 @@ class D4PaperTrader:
                         round(pnl, 2),
                         round(spread, 2),
                         round(slip, 2),
-                        trade["reason"]
+                        trade["reason"],
+                        trade.get("position_id")
                     ))
                 else:
                     conn.execute("""
                         INSERT INTO trades
                             (entry_time, exit_time, direction, entry_price, exit_price,
                              stop_loss, take_profit, units, risk_amount, r_multiple,
-                             net_pnl, spread_cost, slippage_cost, exit_reason)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             net_pnl, spread_cost, slippage_cost, exit_reason, position_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         entry_ts,
                         exit_ts,
@@ -562,21 +648,29 @@ class D4PaperTrader:
                         round(pnl, 2),
                         round(spread, 2),
                         round(slip, 2),
-                        trade["reason"]
+                        trade["reason"],
+                        trade.get("position_id")
                     ))
                 conn.commit()
         except Exception as exc:
             print(f"  DB persist error: {exc}")
 
     def _new_trades(self):
-        """Return trades completed since last check via PaperBroker."""
-        history = self.execution.broker._trade_history
-        new_count = len(history) - self._last_trade_count
-        self._last_trade_count = len(history)
-        return history[-new_count:] if new_count > 0 else []
+        """Return trades closed since the last poll (broker-agnostic).
+
+        PaperBroker drains its simulated history; OandaBroker reconstructs closes
+        from the platform. Dedup is by position_id so restarts are idempotent.
+        """
+        known_ids = {str(t.get("position_id")) for t in self.trades if t.get("position_id")}
+        return self.execution.broker.poll_closed_trades(known_ids=known_ids, open_meta=self._open_meta)
 
     def process_candle(self, row: pd.Series, ts: pd.Timestamp, bar_idx: int):
-        """Process one completed M15 candle via PaperBroker for exits, then check entries."""
+        """Process one completed M15 candle, then check entries.
+
+        PaperBroker simulates SL/TP exits natively; server-managed brokers
+        (OANDA) enforce them platform-side and the trader polls closes via
+        poll_closed_trades.
+        """
         # Step 1: Let PaperBroker check SL/TP natively (handles slippage, spread, logging)
         candle_row = CandleRow(
             timestamp=ts.to_pydatetime(),
@@ -587,7 +681,8 @@ class D4PaperTrader:
             adx_14=0.0, ema_9=0.0, ema_20=0.0,
             session_london=1, session_ny=0, session_overlap=0,
         )
-        self.execution.broker.update_prices(candle_row)
+        if not self.execution.broker.server_managed_sl_tp:
+            self.execution.broker.update_prices(candle_row)
 
         # Step 2: Persist newly closed trades
         for trade in self._new_trades():
@@ -604,7 +699,8 @@ class D4PaperTrader:
                 exit_slip = actual_exit - intended_exit if d == "BUY" else intended_exit - actual_exit
                 self._exit_slippage_history.append(exit_slip)
             print(f"  EXIT {d} R={r:+.3f} PnL=${pnl:+.2f} | {reason}")
-            # Clear open positions from DB since trade just closed
+            # Position closed — drop its open-meta and clear DB open positions
+            self._open_meta.pop(trade.get("position_id"), None)
             self._clear_open_positions()
 
         # Cap memory: trim trades list to prevent unbounded growth
@@ -612,8 +708,9 @@ class D4PaperTrader:
             excess = len(self.trades) - TRADE_HISTORY_MAX
             self.trades = self.trades[excess:]
 
-        # Step 3: Check for new entry (only if no open positions)
-        if self.execution.broker.get_open_positions():
+        # Step 3: Check for new entry (only if flat). The trader-side _open_meta
+        # gate covers API lag where get_open_positions() has not caught up yet.
+        if self.execution.broker.get_open_positions() or self._open_meta:
             return
         if self.features.empty or ts not in self.features.index:
             return
@@ -658,7 +755,7 @@ class D4PaperTrader:
         take_profit = raw_entry + 2.0 * risk_dist if direction == "BUY" else raw_entry - 2.0 * risk_dist
 
         # Route through risk manager and execution engine
-        account = self.execution.broker.get_account_state()
+        account = self._account_state()
         current_spread = account.current_spread_pips
         self._spread_history.append(current_spread)
 
@@ -667,7 +764,25 @@ class D4PaperTrader:
             stop_loss=stop_loss, take_profit=take_profit, atr_at_entry=atr,
             signal_score=1.0, regime="TRENDING_UP" if direction == "BUY" else "TRENDING_DOWN",
             confidence=0.75, machine_mode=STRATEGY)
-        risk_order = self.risk_mgr.evaluate(instruction, account, list(self.execution.broker._trade_history))
+
+        # Data-integrity guard for server-managed brokers: reject if the cached
+        # candle close diverges from the live OANDA mid-price (stale cache would
+        # otherwise feed a far-off entry that the broker collar then rejects).
+        if self.execution.broker.server_managed_sl_tp:
+            live_price = self.execution.broker._current_market_price()
+            collar = float(self.settings.get("execution", {}).get("oanda_price_collar_pct", 5.0))
+            if live_price and abs(float(close) - live_price) / live_price * 100.0 > collar:
+                self._missed_signals += 1
+                ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S+00:00") if hasattr(ts, "strftime") else str(ts)
+                self._missed_signal_log.append({
+                    "timestamp": ts_str, "direction": direction,
+                    "price": round(entry_price, 2), "reason": "cache_vs_live_collar",
+                })
+                self._save_missed_signal(ts_str, direction, round(entry_price, 2), "cache_vs_live_collar")
+                print(f"  SKIP {direction} — stale cache (close {float(close):.2f} vs live {live_price:.2f})")
+                return
+
+        risk_order = self.risk_mgr.evaluate(instruction, account, list(self.trades))
         if not risk_order.approved:
             self._missed_signals += 1
             rejection_reason = risk_order.rejection_reason or "unknown"
@@ -702,6 +817,27 @@ class D4PaperTrader:
             slip = result.fill_price - instruction.entry_price
             self._slippage_history.append(slip)
 
+        # Track open-position meta keyed by position_id (OANDA trade ID where
+        # available) so closes can be reconstructed and risk survives restart.
+        raw_resp = result.raw_response or {}
+        position_id = str(raw_resp.get("tradeID") or result.order_id or "")
+        if not position_id:
+            position_id = f"{STRATEGY}_{result.fill_time.strftime('%Y%m%d_%H%M%S')}"
+        units_value = float(risk_order.units) if risk_order.units else float(risk_order.lot_size or 0.0)
+        self._open_meta[position_id] = {
+            "position_id": position_id,
+            "direction": direction,
+            "intended_entry": float(instruction.entry_price),
+            "actual_entry": float(result.fill_price) if result.fill_price is not None else float(instruction.entry_price),
+            "stop_loss": float(stop_loss),
+            "take_profit": float(take_profit),
+            "units": units_value,
+            "lot_size": float(risk_order.lot_size) if risk_order.lot_size else 0.0,
+            "risk_amount": float(risk_order.risk_amount) if risk_order.risk_amount else 0.0,
+            "entry_slippage": float(slip),
+            "entry_slippage_cost": float(slip) * units_value * self.spec.ounces_per_unit,
+            "open_time": datetime.now(UTC),
+        }
         self.last_signal_time = ts
         self._last_entry_time = datetime.now(UTC)
         self._last_direction = direction
@@ -779,7 +915,7 @@ class D4PaperTrader:
 
     def _print_status(self):
         """Print current status line with spread and metrics."""
-        account = self.execution.broker.get_account_state()
+        account = self._account_state()
         positions = self.execution.broker.get_open_positions()
         if positions:
             p = positions[0]
@@ -797,7 +933,7 @@ class D4PaperTrader:
     def _print_observability_report(self):
         """Print a structured summary of all observability metrics."""
         uptime = (datetime.now(UTC) - self._start_time).total_seconds()
-        account = self.execution.broker.get_account_state()
+        account = self._account_state()
         avg_slip = sum(self._slippage_history) / max(len(self._slippage_history), 1)
         avg_exit_slip = sum(self._exit_slippage_history) / max(len(self._exit_slippage_history), 1)
         avg_spread = sum(self._spread_history) / max(len(self._spread_history), 1)
@@ -822,7 +958,7 @@ class D4PaperTrader:
         print(f"\n{'='*60}")
         print(f"D4 PAPER TRADER — SESSION SUMMARY")
         print(f"{'='*60}")
-        account = self.execution.broker.get_account_state()
+        account = self._account_state()
         print(f"Final equity: ${account.equity:.2f}")
         print(f"Peak equity: ${account.peak_equity_30d:.2f}")
         dd = (account.peak_equity_30d - account.equity) / account.peak_equity_30d * 100 if account.peak_equity_30d > 0 else 0
@@ -885,6 +1021,11 @@ def main():
     p.add_argument("--poll-seconds", type=float, default=60.0)
     p.add_argument("--run-once", action="store_true", help="Process once and exit")
     p.add_argument("--force", action="store_true", help="Override PID lock if stale")
+    p.add_argument("--broker", choices=["paper", "oanda"], default="paper",
+                   help="Execution broker: paper (in-memory sim, default) or oanda "
+                        "(real OANDA practice/live account). OANDA mode requires "
+                        "ALLOW_OANDA_ORDERS=true (and ALLOW_LIVE_TRADING=true + "
+                        "OANDA_ENV=live for live).")
     args = p.parse_args()
 
     # Single-instance protection
@@ -892,10 +1033,27 @@ def main():
         return 1
 
     settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
-    # Ensure paper mode
-    settings.setdefault("broker", {})["paper_trade"] = True
-    settings.setdefault("broker", {}).setdefault("oanda", {})
-    settings["broker"]["oanda"]["default_environment"] = "practice"
+    if args.broker == "paper":
+        # Ensure paper mode
+        settings.setdefault("broker", {})["paper_trade"] = True
+        settings.setdefault("broker", {}).setdefault("oanda", {})
+        settings["broker"]["oanda"]["default_environment"] = "practice"
+    else:
+        # OANDA practice/live: real broker path. Interlocks are enforced by
+        # OandaBroker.__init__ (_assert_oanda_interlocks). Default the record to
+        # its own DB so the paper evidence trail stays clean.
+        settings.setdefault("broker", {})["paper_trade"] = False
+        settings.setdefault("broker", {}).setdefault("oanda", {})
+        settings["broker"]["oanda"]["default_environment"] = "practice"
+        pt = settings.setdefault("paper_trading", {})
+        if not pt.get("db_path"):
+            pt["db_path"] = str(ROOT / "aurum1" / "data" / "oanda_practice.sqlite3")
+
+    # Fail-fast: requested broker must match engine routing
+    if bool(settings.get("broker", {}).get("paper_trade", True)) != (args.broker == "paper"):
+        print("ERROR: broker routing mismatch — requested --broker %s" % args.broker, file=sys.stderr)
+        _release_pid_lock()
+        return 1
 
     trader = D4PaperTrader(settings)
 

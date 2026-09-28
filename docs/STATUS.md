@@ -28,6 +28,14 @@
 > script. All services recovered; no data lost. See
 > `docs/system/DISK_FULL_INCIDENT_2026-09-28.md`.
 
+> **2026-09-28 — OANDA practice mode (real execution)**: the 200-trade DSR gate ran on
+> 205 paper trades (2/3 automated criteria passed). The D4 trader was made
+> **broker-agnostic** (`--broker paper|oanda`) and now runs against the real **OANDA
+> practice (demo) account** — MARKET orders with server-side SL/TP, closes polled from
+> OANDA and reconstructed with R. Practice trades persist to `oanda_practice.sqlite3`
+> (separate from the paper evidence). Prerequisite: a valid practice account ID in the
+> server `.env` (the current one was rejected by OANDA).
+
 ## 2026-08-28 Maintenance — Deploy Gap + Weekly Report Fix
 
 **Symptom**: `aurum1-d4-shadow.service` failing every 15 min (2,353 failures since Aug 1);

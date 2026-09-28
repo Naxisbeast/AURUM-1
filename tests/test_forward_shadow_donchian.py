@@ -323,7 +323,7 @@ def test_forward_shadow_parity_against_donchian_historical_runner(tmp_path: Path
 
 
 def test_forward_shadow_runner_has_no_oanda_order_path() -> None:
-    source = Path("scripts/forward_shadow_donchian.py").read_text(encoding="utf-8")
+    source = Path("scripts/shadow/forward_shadow_donchian.py").read_text(encoding="utf-8")
 
     assert "OandaBroker" not in source
     assert ".submit_order(" not in source

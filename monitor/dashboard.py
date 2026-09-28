@@ -30,6 +30,7 @@ from monitor.metrics import (
     get_system_status,
     load_equity_curve,
     load_system_health,
+    resolve_trading_db,
 )
 from monitor.evidence import EvidenceCollector
 
@@ -42,8 +43,8 @@ def main() -> None:
     window_days = int(monitor_settings.get("rolling_window_days", 30))
     max_rows = int(monitor_settings.get("equity_chart_max_rows", 10000))
 
-    equity_curve = load_equity_curve(db_path).tail(max_rows)
-    trades = load_trade_log(db_path)
+    equity_curve = load_equity_curve(db_path, settings).tail(max_rows)
+    trades = load_trade_log(db_path, settings)
     events = load_event_log(db_path)
     status = get_system_status(db_path, settings)
 
@@ -53,9 +54,9 @@ def main() -> None:
     render_equity_curve(equity_curve, settings)
     render_trade_chart(equity_curve, trades, settings)
     render_rolling_metrics(equity_curve, trades, window_days)
-    render_open_positions(db_path)
+    render_open_positions(db_path, settings)
     render_signal_monitor(trades, events, status)
-    render_system_health(db_path)
+    render_system_health(db_path, settings)
     render_trade_log(trades)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
 
@@ -311,10 +312,10 @@ def render_r_distribution(trades: pd.DataFrame) -> None:
         st.dataframe(decile_df, use_container_width=True, hide_index=True)
 
 
-def render_open_positions(db_path: str) -> None:
-    """Read open positions from paper_trading DB (no broker creation)."""
+def render_open_positions(db_path: str, settings: dict | None = None) -> None:
+    """Read open positions from the trading-record DB (no broker creation)."""
     st.subheader("Open Positions")
-    paper_db = Path(db_path).parent / "paper_trading.sqlite3"
+    paper_db = resolve_trading_db(db_path, settings)
     if not paper_db.exists():
         st.info("No open positions")
         return
@@ -359,9 +360,9 @@ def render_signal_monitor(trades: pd.DataFrame, events: pd.DataFrame, status: di
     st.write(f"Next high-impact event: **{event}**")
 
 
-def render_system_health(db_path: str) -> None:
+def render_system_health(db_path: str, settings: dict | None = None) -> None:
     """Render system health panel: latency, slippage, spread, missed signals."""
-    health = load_system_health(db_path)
+    health = load_system_health(db_path, settings)
 
     st.subheader("System Health")
 
@@ -478,11 +479,11 @@ def render_refresh_timer(refresh_interval: int) -> None:
     st.rerun()
 
 
-def load_trade_log(db_path: str) -> pd.DataFrame:
+def load_trade_log(db_path: str, settings: dict | None = None) -> pd.DataFrame:
     path = Path(db_path)
-    paper_db = path.parent / "paper_trading.sqlite3"
+    paper_db = resolve_trading_db(db_path, settings)
 
-    # Try paper_trading first (has actual trade data)
+    # Try the trading record first (has actual trade data)
     if paper_db.exists():
         with closing(sqlite3.connect(paper_db)) as conn:
             try:

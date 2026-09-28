@@ -600,3 +600,161 @@ def test_close_all_positions_paper() -> None:
     with closing(sqlite3.connect(engine.db_path)) as conn:
         closed_count = conn.execute("SELECT COUNT(*) FROM trades_log WHERE status='closed'").fetchone()[0]
     assert closed_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Broker-agnostic refactor tests (OANDA practice readiness)
+# ---------------------------------------------------------------------------
+
+
+def test_execution_engine_routes_to_oanda(monkeypatch) -> None:
+    """paper_trade=False must route to OandaBroker (broker-agnostic live path)."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    engine = ExecutionEngine(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+
+    assert isinstance(engine.broker, OandaBroker)
+    assert engine.broker.server_managed_sl_tp is True
+    assert PaperBroker.server_managed_sl_tp is False
+
+
+def test_oanda_broker_market_order_payload_rebases_sl_tp(monkeypatch) -> None:
+    """MARKET order rebases SL/TP around the live ask using intended risk distances."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {
+        "broker": {"paper_trade": False},
+        "execution": {"oanda_order_type": "market"},
+    }))
+    order = make_risk_order(direction="BUY", entry_price=2330.0, stop_loss=2320.0, take_profit=2345.0)
+    order.units = 10.0
+    broker._pricing = lambda instrument: {  # type: ignore[method-assign]
+        "prices": [{"bids": [{"price": "2331.0"}], "asks": [{"price": "2331.5"}]}]
+    }
+
+    payload = broker._order_payload(order, order_type="market")
+
+    assert payload["type"] == "MARKET"
+    assert payload["units"] == "10"
+    assert payload["timeInForce"] == "FOK"
+    # ask 2331.5; sl = ask - 10.0 = 2321.5 ; tp = ask + 15.0 = 2346.5
+    assert float(payload["stopLossOnFill"]["price"]) == pytest.approx(2321.5)
+    assert float(payload["takeProfitOnFill"]["price"]) == pytest.approx(2346.5)
+
+
+def test_oanda_broker_market_submit_extracts_trade_id(monkeypatch) -> None:
+    """Market submit keys the OANDA tradeID for the trader's open-meta."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {
+        "broker": {"paper_trade": False},
+        "execution": {"oanda_order_type": "market"},
+    }))
+    broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
+    broker._current_market_price = lambda: 2330.0  # type: ignore[method-assign]
+    broker._pricing = lambda instrument: {  # type: ignore[method-assign]
+        "prices": [{"bids": [{"price": "2330.0"}], "asks": [{"price": "2330.5"}]}]
+    }
+    broker._submit_limit_order = lambda data: {  # type: ignore[method-assign]
+        "orderFillTransaction": {
+            "id": "999", "price": "2330.5", "time": "2026-01-01T12:00:00Z",
+            "tradeOpened": {"tradeID": "777"},
+        }
+    }
+
+    result = broker.submit_order(make_risk_order(direction="BUY"))
+
+    assert result.success is True
+    assert result.order_id == "777"
+    assert result.raw_response["tradeID"] == "777"
+
+
+def test_oanda_broker_price_collar_rejects_far_entry(monkeypatch) -> None:
+    """OandaBroker rejects an entry far from the current market (mirrors PaperBroker)."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
+    broker._current_market_price = lambda: 2330.0  # type: ignore[method-assign]
+    # entry_price 2563 is ~10% above market 2330
+    result = broker.submit_order(make_risk_order(entry_price=2563.0, stop_loss=2553.0, take_profit=2578.0))
+
+    assert result.success is False
+    assert result.rejection_reason is not None
+    assert "price_collar_violation" in result.rejection_reason
+
+
+def test_oanda_broker_poll_closed_trades_reconstructs(monkeypatch) -> None:
+    """Closed-trade polling reconstructs the trader-shaped dict (R from meta)."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._closed_trades = lambda: {"trades": [{  # type: ignore[method-assign]
+        "id": "555", "initialUnits": "10", "realizedPL": "42.5", "financing": "-1.2",
+        "averageOpenPrice": "2330.1", "averageClosePrice": "2332.0",
+        "openTime": "2026-01-01T12:00:00Z", "closeTime": "2026-01-01T14:00:00Z",
+        "stopLossOrder": {"state": "CANCELLED"}, "takeProfitOrder": {"state": "FILLED"},
+    }]}
+    open_meta = {
+        "555": {
+            "position_id": "555", "direction": "BUY", "intended_entry": 2330.0,
+            "stop_loss": 2320.0, "take_profit": 2345.0, "units": 10.0, "risk_amount": 100.0,
+        }
+    }
+
+    trades = broker.poll_closed_trades(known_ids=set(), open_meta=open_meta)
+
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["position_id"] == "555"
+    assert t["direction"] == "BUY"
+    assert t["reason"] == "take_profit"
+    assert t["net_pnl"] == pytest.approx(41.3)  # realizedPL + financing
+    assert t["r_multiple"] == pytest.approx(0.413)
+
+
+def test_oanda_broker_poll_closed_trades_dedups(monkeypatch) -> None:
+    """Known trade IDs (already persisted) are skipped across restarts."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._closed_trades = lambda: {"trades": [{  # type: ignore[method-assign]
+        "id": "555", "initialUnits": "10", "realizedPL": "1.0", "financing": "0.0",
+        "averageOpenPrice": "2330.0", "averageClosePrice": "2331.0",
+        "openTime": "2026-01-01T12:00:00Z", "closeTime": "2026-01-01T14:00:00Z",
+        "stopLossOrder": {}, "takeProfitOrder": {},
+    }]}
+
+    assert broker.poll_closed_trades(known_ids={"555"}, open_meta={}) == []
+
+
+def test_oanda_broker_poll_closed_trades_skips_unknown(monkeypatch) -> None:
+    """Trades the trader never opened are not fabricated."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+    broker._closed_trades = lambda: {"trades": [{  # type: ignore[method-assign]
+        "id": "777", "initialUnits": "10", "realizedPL": "5.0", "financing": "0.0",
+        "averageOpenPrice": "2330.0", "averageClosePrice": "2331.0",
+        "openTime": "2026-01-01T12:00:00Z", "closeTime": "2026-01-01T14:00:00Z",
+        "stopLossOrder": {}, "takeProfitOrder": {},
+    }]}
+
+    assert broker.poll_closed_trades(known_ids=set(), open_meta={}) == []
+
+
+def test_paper_broker_poll_closed_trades_drains() -> None:
+    """PaperBroker.poll_closed_trades drains the simulated history once."""
+    broker = make_paper_engine().broker
+    broker.submit_order(make_risk_order(direction="BUY", stop_loss=2320.0))
+    broker.update_prices(make_candle(low=2310.0))
+
+    first = broker.poll_closed_trades(set(), {})
+    second = broker.poll_closed_trades(set(), {})
+
+    assert len(first) == 1
+    assert second == []
+
+
+def test_oanda_restore_state_from_snapshot_noop(monkeypatch) -> None:
+    """OandaBroker ignores persisted snapshot state (platform is truth)."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {"broker": {"paper_trade": False}}))
+
+    broker.restore_state_from_snapshot({"equity": 12345.0, "trade_history": [{"x": 1}], "positions": []})
+
+    assert not hasattr(broker, "_trade_history")
+    assert not hasattr(broker, "_equity")

@@ -69,8 +69,18 @@ systemctl status aurum1-forward-shadow.service
 
 ### D4 Paper Trader 🏆
 
-The autonomous paper trading service. Reads from the forward shadow's market cache, executes Donchian 2R BUY+SELL trades through PaperBroker, and persists to `paper_trading.sqlite3`.
+The autonomous trading service. Reads from the forward shadow's market cache, executes
+Donchian 2R BUY+SELL trades, and persists to a trading-record SQLite DB.
 
+Broker mode is selected with `--broker`:
+- `--broker paper` (default): in-memory `PaperBroker`, persists to `paper_trading.sqlite3`
+  (the 205-trade DSR evidence trail).
+- `--broker oanda`: real OANDA execution on the practice (demo) account via `OandaBroker`
+  (MARKET orders with SL/TP rebased around the live price; server-side SL/TP; closes
+  polled from OANDA and reconstructed with R). Persists to `oanda_practice.sqlite3` so
+  the paper evidence stays clean.
+
+The deployed service runs OANDA practice mode:
 ```bash
 # Deploy the systemd service
 sudo cp deploy/aurum1-d4-paper.service /etc/systemd/system/
@@ -86,6 +96,13 @@ journalctl -u aurum1-d4-paper.service -f
 # View recent trades
 journalctl -u aurum1-d4-paper.service -n 50 --no-pager | grep -E 'ENTRY|EXIT|EQ='
 ```
+
+The D4 unit loads OANDA credentials from `EnvironmentFile=/opt/aurum1/.env`
+(`OANDA_API_KEY`, `OANDA_ACCOUNT_ID`) and sets `ALLOW_OANDA_ORDERS=true` with
+`OANDA_ENV=practice` / `ALLOW_LIVE_TRADING=false`. The **forward-shadow unit must keep
+`ALLOW_OANDA_ORDERS` unset** — it refuses to run with it true. To point the dashboard at
+the practice record, set `paper_trading.db_path` in the server's `settings.yaml`
+(e.g. `aurum1/data/oanda_practice.sqlite3`).
 
 ### Shadow Timer Services (D1-D6 Comparison)
 

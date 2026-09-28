@@ -51,6 +51,11 @@ class PositionRecord:
 
 
 class BrokerBase(ABC):
+    # Capability flag: True when SL/TP are enforced server-side by the platform
+    # (e.g. OANDA), so the trader must poll for closed positions instead of
+    # simulating exits via update_prices(). Paper is False.
+    server_managed_sl_tp: bool = False
+
     @abstractmethod
     def submit_order(self, order: RiskOrder) -> OrderResult:
         raise NotImplementedError
@@ -70,6 +75,28 @@ class BrokerBase(ABC):
     @abstractmethod
     def get_current_spread_pips(self, instrument: str) -> float:
         raise NotImplementedError
+
+    def poll_closed_trades(self, known_ids: set[str], open_meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return trades closed since the last poll, as trader-shaped dicts.
+
+        `known_ids`: position_ids already persisted by the trader (dedup across
+        restarts). `open_meta`: trader-owned map {position_id -> {risk_amount,
+        stop_loss, take_profit, intended_entry, units, ...}} needed to reconstruct
+        r_multiple for brokers that cannot store this server-side.
+
+        Default (no server-managed SL/TP) is to return nothing; PaperBroker drains
+        its simulated trade history; OandaBroker reads closed trades from the API.
+        """
+        return []
+
+    def restore_state_from_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Seed broker-internal state from persisted state.
+
+        PaperBroker consumes this to restore equity/positions/history across a
+        restart. Brokers where the platform is the source of truth (OANDA) leave
+        it a no-op.
+        """
+        return None
 
 
 class PaperBroker(BrokerBase):
@@ -103,6 +130,10 @@ class PaperBroker(BrokerBase):
         self._candle_prices: deque[float] = deque(maxlen=500)
         seed = int(settings.get("general", {}).get("random_seed", settings.get("app", {}).get("random_seed", 42)))
         self._rng = random.Random(seed)
+        # Index into _trade_history of the last trade already drained by
+        # poll_closed_trades(). Lets the trader poll new closes without a
+        # separate counter.
+        self._poll_index = 0
 
     def submit_order(self, order: RiskOrder) -> OrderResult:
         if not order.approved:
@@ -252,6 +283,23 @@ class PaperBroker(BrokerBase):
 
     def get_open_positions(self) -> list[PositionRecord]:
         return list(self._positions.values())
+
+    def poll_closed_trades(self, known_ids: set[str], open_meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return simulated closes since the last poll (drain _trade_history)."""
+        drained = list(self._trade_history[self._poll_index:])
+        self._poll_index = len(self._trade_history)
+        return drained
+
+    def restore_state_from_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Re-seed simulated account state from persisted snapshots/trades."""
+        self._equity = float(snapshot.get("equity", self._equity))
+        self._balance = float(snapshot.get("balance", self._balance))
+        self._peak_equity_30d = float(snapshot.get("peak_equity_30d", self._equity))
+        self._daily_pnl = float(snapshot.get("daily_pnl", 0.0))
+        self._daily_pnl_date = snapshot.get("daily_pnl_date")
+        self._trade_history = list(snapshot.get("trade_history", []))
+        self._positions = {p.position_id: p for p in snapshot.get("positions", [])}
+        self._poll_index = len(self._trade_history)
 
     def get_current_spread_pips(self, instrument: str) -> float:
         """Estimate spread based on session and volatility.
@@ -464,6 +512,10 @@ class PaperBroker(BrokerBase):
 class OandaBroker(BrokerBase):
     """OANDA v20 REST broker adapter using oandapyV20 when available."""
 
+    # OANDA enforces SL/TP server-side, so the trader must poll for closed
+    # positions rather than simulate exits via update_prices().
+    server_managed_sl_tp = True
+
     def __init__(self, settings: dict[str, Any]) -> None:
         self.settings = settings
         self.risk_settings = settings.get("risk", {})
@@ -487,7 +539,23 @@ class OandaBroker(BrokerBase):
         if spread > float(self.risk_settings.get("max_spread_pips", 3.0)):
             return _rejected_order_result(order, "spread_too_wide_at_execution", "oanda")
 
-        data = {"order": self._order_payload(order)}
+        # Price collar / cache-integrity: reject if the intended entry diverges
+        # from the current market by more than PRICE_COLLAR_PCT (mirrors
+        # PaperBroker's collar so a stale signal cannot place a far-off order).
+        collar_pct = float(self.execution_settings.get("oanda_price_collar_pct", 5.0))
+        market_price = self._current_market_price()
+        if market_price is not None and market_price > 0:
+            deviation = abs(float(order.instruction.entry_price) - market_price) / market_price * 100.0
+            if deviation > collar_pct:
+                return _rejected_order_result(
+                    order,
+                    f"price_collar_violation: entry {order.instruction.entry_price:.2f} "
+                    f"is {deviation:.1f}% away from market {market_price:.2f}",
+                    "oanda",
+                )
+
+        order_type = str(self.execution_settings.get("oanda_order_type", "limit")).lower()
+        data = {"order": self._order_payload(order, order_type=order_type)}
         response = self._submit_limit_order(data)
         fill = response.get("orderFillTransaction") or response.get("orderCreateTransaction", {})
         if "orderFillTransaction" not in response:
@@ -505,10 +573,20 @@ class OandaBroker(BrokerBase):
                 raw_response=response,
             )
 
+        # Key the OANDA trade ID so the trader can track open-meta / dedup by
+        # trade ID (aggregated position_id is per-instrument+side and lossy).
+        opened = fill.get("tradeOpened") or {}
+        trade_id = str(opened["tradeID"]) if opened.get("tradeID") is not None else None
+        if trade_id is None and fill.get("tradeID") is not None:
+            trade_id = str(fill["tradeID"])
+        raw = dict(response)
+        raw["tradeID"] = trade_id
+        order_id = trade_id or (str(fill.get("id")) if fill.get("id") is not None else None)
+
         fill_time = _parse_datetime(fill.get("time"))
         return OrderResult(
             success=True,
-            order_id=str(fill.get("id")) if fill.get("id") is not None else None,
+            order_id=order_id,
             fill_price=float(fill.get("price", order.instruction.entry_price)),
             fill_time=fill_time,
             lot_size=float(order.lot_size),
@@ -517,12 +595,21 @@ class OandaBroker(BrokerBase):
             take_profit=float(order.instruction.take_profit),
             rejection_reason=None,
             broker="oanda",
-            raw_response=response,
+            raw_response=raw,
         )
 
     def close_position(self, position_id: str, reason: str) -> OrderResult:
-        response = self._close_oanda_position(position_id)
-        close_txn = response.get("longOrderFillTransaction") or response.get("shortOrderFillTransaction") or {}
+        # OANDA trade IDs are numeric; instrument names are not. Route numeric
+        # ids to TradeClose (a single trade) and names to PositionClose (whole
+        # instrument position) so engine.close_all_positions works for either.
+        if str(position_id).isdigit():
+            response = self._close_trade(str(position_id))
+            close_txn = (response.get("longOrderFillTransaction")
+                         or response.get("shortOrderFillTransaction")
+                         or response.get("orderCancelTransaction") or {})
+        else:
+            response = self._close_oanda_position(position_id)
+            close_txn = response.get("longOrderFillTransaction") or response.get("shortOrderFillTransaction") or {}
         closed_units = abs(float(close_txn.get("units", 0.0))) if close_txn.get("units") is not None else 0.0
         return OrderResult(
             success=True,
@@ -595,18 +682,196 @@ class OandaBroker(BrokerBase):
         ask = float(price.get("asks", [{"price": bid}])[0]["price"])
         return (ask - bid) / float(self.risk_settings.get("pip_size", 0.01))
 
-    def _order_payload(self, order: RiskOrder) -> dict[str, Any]:
+    def _current_market_price(self) -> float | None:
+        """Mid-price for collar checks (None if pricing is unavailable)."""
+        try:
+            pricing = self._pricing(self.instrument)
+        except Exception:
+            return None
+        price = (pricing.get("prices") or [{}])[0]
+        bid = float(price.get("bids", [{"price": 0.0}])[0]["price"])
+        ask = float(price.get("asks", [{"price": bid}])[0]["price"])
+        if bid <= 0 and ask <= 0:
+            return None
+        return (bid + ask) / 2.0
+
+    def _open_trades(self) -> dict[str, Any]:
+        from oandapyV20.endpoints.trades import TradesList
+
+        endpoint = TradesList(self.account_id, params={"state": "OPEN", "instrument": self.instrument})
+        return self._client_instance().request(endpoint)
+
+    def _closed_trades(self) -> dict[str, Any]:
+        from oandapyV20.endpoints.trades import TradesList
+
+        endpoint = TradesList(
+            self.account_id,
+            params={"state": "CLOSED", "instrument": self.instrument, "count": 100},
+        )
+        return self._client_instance().request(endpoint)
+
+    def _close_trade(self, trade_id: str) -> dict[str, Any]:
+        from oandapyV20.endpoints.trades import TradeClose
+
+        endpoint = TradeClose(self.account_id, tradeID=trade_id, data={"units": "ALL"})
+        return self._client_instance().request(endpoint)
+
+    def get_open_trade_details(self) -> list[dict[str, Any]]:
+        """Per-trade open detail (tradeID, direction, units, SL/TP, open_time).
+
+        The aggregated OpenPositions endpoint loses SL/TP, which the trader needs
+        to persist open-position risk per trade. Keys mirror the trader's
+        open_positions rows so `_open_meta` can be built/restored from them.
+        """
+        details: list[dict[str, Any]] = []
+        for t in self._open_trades().get("trades", []):
+            details.append(
+                {
+                    "position_id": str(t.get("id")),
+                    "direction": "BUY" if float(t.get("initialUnits", 0)) > 0 else "SELL",
+                    "units": abs(float(t.get("initialUnits", 0))),
+                    "open_price": float(t.get("price", 0.0)),
+                    "stop_loss": _order_price(t.get("stopLossOrder", {})),
+                    "take_profit": _order_price(t.get("takeProfitOrder", {})),
+                    "open_time": _parse_datetime(t.get("openTime")),
+                }
+            )
+        return details
+
+    def poll_closed_trades(self, known_ids: set[str], open_meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Reconstruct trader-shaped close dicts from OANDA's closed-trade list.
+
+        Skips trade IDs already persisted (dedup across restarts) and trades the
+        trader never opened (external/manual closes — logged, not fabricated).
+        """
+        closed: list[dict[str, Any]] = []
+        for t in self._closed_trades().get("trades", []):
+            tid = str(t.get("id"))
+            if tid in known_ids:
+                continue
+            meta = open_meta.get(tid)
+            if meta is None:
+                # Position the trader never opened (external/manual close, or a
+                # leftover from before the switch). Don't fabricate a trade —
+                # equity reconciles via get_account_state(), which is platform truth.
+                continue
+            closed.append(self._build_closed_trade(t, meta))
+        return closed
+
+    def _build_closed_trade(self, t: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
+        """Map an OANDA closed trade + trader open-meta into the trader trade-dict shape."""
+        tid = str(t.get("id"))
+        direction = "BUY" if float(t.get("initialUnits", 0)) > 0 else "SELL"
+        units = abs(float(t.get("initialUnits", 0)))
+        entry = float(t.get("averageOpenPrice", t.get("price", 0.0)))
+        exit_price = float(t.get("averageClosePrice", t.get("closePrice", 0.0)))
+        gross_pnl = float(t.get("realizedPL", 0.0))
+        financing = float(t.get("financing", 0.0))
+        net_pnl = gross_pnl + financing
+        stop_loss = float(meta.get("stop_loss", 0.0))
+        take_profit = float(meta.get("take_profit", 0.0))
+        intended_entry = float(meta.get("intended_entry", entry))
+        sl_state = str(((t.get("stopLossOrder") or {}).get("state") or ""))
+        tp_state = str(((t.get("takeProfitOrder") or {}).get("state") or ""))
+        if sl_state.upper() == "FILLED":
+            reason = "stop_loss"
+            intended_exit = stop_loss
+        elif tp_state.upper() == "FILLED":
+            reason = "take_profit"
+            intended_exit = take_profit
+        else:
+            reason = "manual_close"
+            intended_exit = exit_price
+        entry_slippage = entry - intended_entry if direction == "BUY" else intended_entry - entry
+        exit_slippage = exit_price - intended_exit if direction == "BUY" else intended_exit - exit_price
+        risk_amount = float(meta.get("risk_amount", 0.0))
+        r_multiple = net_pnl / risk_amount if risk_amount > 0 else 0.0
+        entry_slip_cost = entry_slippage * units * self.instrument_spec.ounces_per_unit
+        exit_slip_cost = exit_slippage * units * self.instrument_spec.ounces_per_unit
+        return {
+            "position_id": tid,
+            "direction": direction,
+            "entry": entry,
+            "actual_entry": entry,
+            "intended_entry": intended_entry,
+            "entry_slippage": entry_slippage,
+            "entry_slippage_cost": entry_slip_cost,
+            "exit": exit_price,
+            "actual_exit": exit_price,
+            "intended_exit": intended_exit,
+            "exit_slippage": exit_slippage,
+            "exit_slippage_cost": exit_slip_cost,
+            "total_slippage_cost": entry_slip_cost + exit_slip_cost,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "units": units,
+            "lot_size": self.instrument_spec.units_to_lots(units),
+            "notional_ounces": units * self.instrument_spec.ounces_per_unit,
+            "pnl": gross_pnl,
+            "gross_pnl": gross_pnl,
+            "fee": financing,
+            "financing": financing,
+            "spread_cost": 0.0,
+            "net_pnl": net_pnl,
+            "pnl_after_fees": net_pnl,
+            "risk_amount": risk_amount,
+            "r": r_multiple,
+            "r_multiple": r_multiple,
+            "open_time": _parse_datetime(t.get("openTime")).isoformat(),
+            "closed_at": _parse_datetime(t.get("closeTime")).isoformat(),
+            "reason": reason,
+        }
+
+    def _order_payload(self, order: RiskOrder, order_type: str = "limit") -> dict[str, Any]:
         instruction = order.instruction
         units_value = order.units or self.instrument_spec.lots_to_units(order.lot_size)
         units = units_value if instruction.direction == "BUY" else -units_value
+        precision = int(self.execution_settings.get("oanda_price_precision", 2))
+
+        if order_type == "market":
+            return self._market_order_payload(order, units, precision)
+
         return {
             "type": "LIMIT",
             "instrument": self.instrument,
             "units": self.instrument_spec.format_units(units),
-            "price": str(round(instruction.entry_price, 2)),
-            "stopLossOnFill": {"price": str(round(instruction.stop_loss, 2))},
-            "takeProfitOnFill": {"price": str(round(instruction.take_profit, 2))},
+            "price": str(round(instruction.entry_price, precision)),
+            "stopLossOnFill": {"price": str(round(instruction.stop_loss, precision))},
+            "takeProfitOnFill": {"price": str(round(instruction.take_profit, precision))},
             "timeInForce": "GTC",
+        }
+
+    def _market_order_payload(self, order: RiskOrder, units: float, precision: int) -> dict[str, Any]:
+        """MARKET order with SL/TP rebased around the current market price.
+
+        D4's entry_price is the open of the just-completed candle (a past price);
+        a LIMIT order there would sit unfilled and leave an orphaned GTC order.
+        A MARKET order fills immediately at the live ask/bid, so the stop and
+        target are rebased around that fill using the strategy's intended risk
+        distances — preserving the exact risk PaperBroker simulates.
+        timeInForce=FOK avoids leaving an unfilled order behind.
+        """
+        instruction = order.instruction
+        pricing = self._pricing(self.instrument)
+        price = (pricing.get("prices") or [{}])[0]
+        bid = float(price.get("bids", [{"price": 0.0}])[0]["price"])
+        ask = float(price.get("asks", [{"price": bid}])[0]["price"])
+        ref = ask if instruction.direction == "BUY" else bid
+        sl_dist = abs(float(instruction.entry_price) - float(instruction.stop_loss))
+        tp_dist = abs(float(instruction.take_profit) - float(instruction.entry_price))
+        if instruction.direction == "BUY":
+            sl = ref - sl_dist
+            tp = ref + tp_dist
+        else:
+            sl = ref + sl_dist
+            tp = ref - tp_dist
+        return {
+            "type": "MARKET",
+            "instrument": self.instrument,
+            "units": self.instrument_spec.format_units(units),
+            "stopLossOnFill": {"price": str(round(sl, precision))},
+            "takeProfitOnFill": {"price": str(round(tp, precision))},
+            "timeInForce": "FOK",
         }
 
     def _client_instance(self) -> Any:
@@ -687,6 +952,13 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
         return datetime.now(UTC)
+
+
+def _order_price(order: dict[str, Any]) -> float:
+    """Price from an OANDA order object (used for open-trade SL/TP detail)."""
+    if order.get("price") is not None:
+        return float(order["price"])
+    return 0.0
 
 
 __all__ = ["BrokerBase", "OandaBroker", "OrderResult", "PaperBroker", "PositionRecord"]
