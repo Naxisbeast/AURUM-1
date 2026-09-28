@@ -648,6 +648,12 @@ class OandaBroker(BrokerBase):
 
     def get_open_positions(self) -> list[PositionRecord]:
         response = self._open_positions()
+        # Per-trade SL/TP from TradesList OPEN (aggregated positions lose these;
+        # the status bar and close_all_positions rely on accurate levels).
+        try:
+            details = {d["direction"]: d for d in self.get_open_trade_details()}
+        except Exception:
+            details = {}
         positions: list[PositionRecord] = []
         for item in response.get("positions", []):
             instrument = str(item.get("instrument", self.instrument))
@@ -657,6 +663,7 @@ class OandaBroker(BrokerBase):
                 if units == 0.0:
                     continue
                 price = float(side_data.get("averagePrice", 0.0))
+                d = details.get(direction, {})
                 positions.append(
                     PositionRecord(
                         position_id=f"{instrument}_{side}",
@@ -666,9 +673,9 @@ class OandaBroker(BrokerBase):
                         current_price=price,
                         lot_size=self.instrument_spec.units_to_lots(units),
                         units=units,
-                        stop_loss=0.0,
-                        take_profit=0.0,
-                        open_time=datetime.now(UTC),
+                        stop_loss=float(d.get("stop_loss", 0.0)),
+                        take_profit=float(d.get("take_profit", 0.0)),
+                        open_time=d.get("open_time") or datetime.now(UTC),
                         unrealised_pnl=float(side_data.get("unrealizedPL", 0.0)),
                         broker="oanda",
                     )

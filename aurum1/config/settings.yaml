@@ -114,7 +114,11 @@
   "execution": {
     "fill_timeout_candles": 3,
     "slippage_std_pips": 0.5,
-    "paper_spread_pips": 1.5
+    "paper_spread_pips": 1.5,
+    # OANDA entries use MARKET orders (SL/TP rebased around the live price). A LIMIT
+    # at the past candle-open never fills at a breakout and leaves orphaned GTC orders.
+    "oanda_order_type": "market",
+    "oanda_price_collar_pct": 5.0
   },
   "models": {
     "enable_direction_predictor": false,
@@ -209,5 +213,10 @@
       "trade_count_broadly_consistent_with_historical_expectation",
       "no_manual_intervention_needed"
     ]
+  },
+  "paper_trading": {
+    # Trading-record DB the dashboard resolves as PRIMARY (OANDA practice/demo).
+    # The paper shadow (--broker paper) keeps its record in paper_trading.sqlite3.
+    "db_path": "aurum1/data/oanda_practice.sqlite3"
   }
 }

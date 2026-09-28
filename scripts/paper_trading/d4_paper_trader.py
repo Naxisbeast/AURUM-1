@@ -1037,6 +1037,9 @@ def main():
                         "Lets a paper shadow run alongside the OANDA practice trader.")
     p.add_argument("--health-file", type=Path, default=None,
                    help="Override the health file (default run/d4_paper_trader_health.json).")
+    p.add_argument("--db-path", type=Path, default=None,
+                   help="Override the trading-record DB path (defaults per --broker: "
+                        "paper->paper_trading.sqlite3, oanda->oanda_practice.sqlite3).")
     args = p.parse_args()
 
     settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
@@ -1052,10 +1055,14 @@ def main():
         return 1
 
     if args.broker == "paper":
-        # Ensure paper mode
+        # Ensure paper mode. The paper shadow ALWAYS uses its own record
+        # (paper_trading.sqlite3), regardless of settings.paper_trading.db_path
+        # which points at the OANDA practice record.
         settings.setdefault("broker", {})["paper_trade"] = True
         settings.setdefault("broker", {}).setdefault("oanda", {})
         settings["broker"]["oanda"]["default_environment"] = "practice"
+        pt = settings.setdefault("paper_trading", {})
+        pt["db_path"] = str(args.db_path) if args.db_path else str(ROOT / "aurum1" / "data" / "paper_trading.sqlite3")
     else:
         # OANDA practice/live: real broker path. Interlocks are enforced by
         # OandaBroker.__init__ (_assert_oanda_interlocks). Default the record to
@@ -1064,7 +1071,9 @@ def main():
         settings.setdefault("broker", {}).setdefault("oanda", {})
         settings["broker"]["oanda"]["default_environment"] = "practice"
         pt = settings.setdefault("paper_trading", {})
-        if not pt.get("db_path"):
+        if args.db_path:
+            pt["db_path"] = str(args.db_path)
+        elif not pt.get("db_path"):
             pt["db_path"] = str(ROOT / "aurum1" / "data" / "oanda_practice.sqlite3")
 
     # Fail-fast: requested broker must match engine routing
