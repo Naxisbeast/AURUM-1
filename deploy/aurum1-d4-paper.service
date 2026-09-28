@@ -9,11 +9,14 @@ Type=simple
 User=aurum1
 Group=aurum1
 WorkingDirectory=/opt/aurum1
+# OANDA_API_KEY / OANDA_ACCOUNT_ID come from the repo .env (trader does not load dotenv).
+EnvironmentFile=/opt/aurum1/.env
 Environment=OANDA_ENV=practice
-Environment=ALLOW_OANDA_ORDERS=false
+# OANDA practice (demo) broker mode — real execution, demo money. The forward-shadow
+# data service MUST keep ALLOW_OANDA_ORDERS unset (it refuses true).
+Environment=ALLOW_OANDA_ORDERS=true
 Environment=ALLOW_LIVE_TRADING=false
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --poll-seconds 60
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --broker oanda --poll-seconds 60
 Restart=on-failure
 RestartSec=30
 

@@ -78,13 +78,16 @@
     }
   },
   "risk": {
-    "spread_filter_pips": 3.0,
+    "spread_filter_pips": 100.0,
     "default_spread_pips": 1.5,
     "risk_per_trade_pct": 0.0035,
     "kelly_min_trades": 20,
     "kelly_default_fraction": 0.25,
     "kelly_max_fraction": 0.25,
-    "max_spread_pips": 3.0,
+    # Real gold spreads are ~$0.30-0.80 (~30-80 pips @ 0.01); the paper sim's ~1.5-3
+    # "pips" was unrealistically tight. 100 pips (~$1.00) is a hard safety cap, not a
+    # profit filter — OANDA practice will reveal the real cost economics.
+    "max_spread_pips": 100.0,
     "daily_loss_kill_pct": 0.03,
     "total_drawdown_kill_pct": 0.08,
     "drawdown_recovery_threshold_pct": 0.05,
