@@ -339,8 +339,13 @@ journalctl -u aurum1-d4-paper.service --since today --no-pager | grep 'OBSERVABI
   - Other — check file permissions and disk space
 
 **Database growing too large**:
-- The shadow database grows ~3MB/day. 28 daily backups are retained.
-- Clean old backups manually if needed: `rm backups/forward_shadow/old_backup.sqlite3`
+- The shadow database grows ~3MB/day. `backup_forward_shadow_db.sh` now prunes to the
+  newest 28 backups automatically (override with `SHADOW_BACKUP_RETENTION`), so the
+  backup dir stays bounded (~5.5 GB at current growth).
+- Manual cleanup is only needed if you intentionally change retention:
+  `rm backups/forward_shadow/<old_backup.sqlite3>`
+- If disk space is still a concern, check `df -h /` first — see
+  `docs/system/DISK_FULL_INCIDENT_2026-09-28.md` for the full-disk outage this replaced.
 
 ---
 
