@@ -187,7 +187,7 @@ def get_system_status(
     daily_kill = daily_pnl < -(equity * float(risk_settings.get("daily_loss_kill_pct", 0.03)))
     total_drawdown_kill = equity < peak_equity * (1.0 - float(risk_settings.get("total_drawdown_kill_pct", 0.08)))
     return {
-        "system_mode": "PAPER" if bool(broker_settings.get("paper_trade", True)) else "LIVE",
+        "system_mode": _system_mode_label(broker_settings),
         "last_candle_processed": last_candle,
         "open_positions": open_positions,
         "equity": equity,
@@ -199,6 +199,15 @@ def get_system_status(
         "total_drawdown_kill_triggered": total_drawdown_kill,
         "current_spread_pips": spread,
     }
+
+
+def _system_mode_label(broker_settings: dict) -> str:
+    """Status-bar mode label: PAPER (in-memory sim), OANDA PRACTICE (real demo
+    execution), or LIVE (real live execution)."""
+    if bool(broker_settings.get("paper_trade", True)):
+        return "PAPER"
+    env = str(broker_settings.get("oanda", {}).get("default_environment", "practice")).lower()
+    return "OANDA PRACTICE" if env == "practice" else "LIVE"
 
 
 def _time_indexed(frame: pd.DataFrame, value_column: str) -> pd.Series:

@@ -90,7 +90,7 @@ def render_evidence_progress() -> None:
 
 def render_status_bar(status: dict[str, Any]) -> None:
     mode = str(status.get("system_mode", "STOPPED"))
-    color = "#22c55e" if mode == "LIVE" else "#facc15" if mode == "PAPER" else "#ef4444"
+    color = "#22c55e" if mode in ("LIVE", "OANDA PRACTICE") else "#facc15" if mode == "PAPER" else "#ef4444"
     last_candle = _format_timestamp(status.get("last_candle_processed"))
     daily_pnl = float(status.get("daily_pnl", 0.0))
     pnl_color = "#16a34a" if daily_pnl >= 0.0 else "#dc2626"

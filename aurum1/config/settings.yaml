@@ -6,7 +6,9 @@
     "random_seed": 42
   },
   "broker": {
-    "paper_trade": true,
+    # False = real broker execution (OANDA practice/demo for D4). --broker paper
+    # forces True at runtime; this file reflects the deployed practice mode.
+    "paper_trade": false,
     "paper_initial_equity": 10000.0,
     "oanda": {
       "api_key_env": "OANDA_API_KEY",
