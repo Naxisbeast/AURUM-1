@@ -57,7 +57,10 @@ Every failed experiment is archived and documented because knowing why something
 
 ## Where It Stands
 
-D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the strongest candidate discovered through research. It's paper trading autonomously on a cloud server at 0.35% risk per trade.
+D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is the strongest candidate discovered
+through research. It passed the 200-trade gate on its paper record, and as of 2026-09-28 it
+trades on a **real OANDA practice (demo) account** — real order execution on demo money —
+at 0.35% risk per trade, with the architecture kept **broker-agnostic** for future live trading.
 
 | Test | Result |
 |------|--------|
@@ -65,12 +68,23 @@ D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is currently the stronges
 | Monte Carlo (10,000 simulations) | 0% ruin probability |
 | TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
 | Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
-| Live paper trades | **104 trades**, +$954 net, equity $11,109 (+11.1%) |
-| Live win rate | **50.0%** |
-| Live avg R | **+0.49** |
-| Max drawdown (lifetime) | ~2.5% (vs 15% risk gate threshold) |
+| **200-trade DSR gate (2026-09-28)** | **2/3 automated criteria passed** on **205 trades** |
+| Paper record (retired) | **205 trades**, **+$2,157 net**, equity **$12,312 (+23%)**, **PF 2.08** |
+| Live win rate | **51.2%** (105W / 100L) |
+| Live avg R | **+0.53** |
+| Max drawdown (lifetime) | ~1.6% (vs 15% risk gate threshold) |
 | 50-trade risk review gate | ✅ PASSED (4/4 criteria) |
 | 100-trade strategy review gate | ✅ RUN (2026-08-16) — 2/3 automated criteria passed |
+| **Current execution** | **OANDA practice (demo)** — real REST orders, server-side SL/TP |
+
+> **2026-09-28 — real execution.** The 200-trade DSR gate ran on 205 paper trades: criteria 2
+> (Sharpe band) and 3 (PF ≥ 1.05) passed; criterion 1 (raw DSR ≥ 0.95) failed only because
+> the deflation pool is 4 same-family trials — the correlation-adjusted DSR is 1.00 and the
+> walk-forward DSR 0.997. On that basis D4 moved to a **real OANDA practice (demo) account**
+> (`--broker oanda`): MARKET orders with SL/TP rebased around the live price, closes polled
+> from OANDA, and its record kept in `oanda_practice.sqlite3` (separate from the paper evidence).
+> One honest caveat: real gold spreads (~$0.55) are far wider than the paper sim assumed, so
+> the practice record is the true economic test.
 
 [Full status →](docs/STATUS.md)
 [Live dashboard →](https://dashboard.auram.software)

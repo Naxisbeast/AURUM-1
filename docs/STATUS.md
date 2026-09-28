@@ -6,7 +6,7 @@
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| D4 Paper Trader 🏆 | ✅ **ACTIVE** | Donchian breakout, 2R exit, BUY+SELL. **Risk: 0.35% configured** (actual ~0.17% — see Performance Assessment) — 148 trades, +$1,655 net, equity ~$11,810 (+18.1%) |
+| D4 🏆 | ✅ **ACTIVE (OANDA practice)** | Donchian breakout, 2R exit, BUY+SELL. **Risk 0.35%**. Paper era (retired): 205 trades, +$2,157, PF 2.08, equity $12,312 (+23%). Now trading the **OANDA practice (demo) account** (`--broker oanda`) → `oanda_practice.sqlite3` |
 | Forward Shadow (Raw Donchian 2R) | ✅ **ACTIVE** | Data pipeline — M15 candles cached, errors_24h=0 |
 | Dashboard | ✅ **ACTIVE** | Streamlit via Cloudflare tunnel (localhost bind, hardened) |
 | D1-D7 Shadow Journals | ✅ **FIXED (2026-08-28)** | D4 shadow timer was failing since Jul 21 (stale paths). Repaired + now runs clean. D2-D7 research-only |
@@ -79,22 +79,24 @@ ranging gold, not a system fault — verified the paper trader is independent of
 | **3: Analytics** | ✅ Complete | Trade quality scoring (MAE/MFE), prop firm simulator, system health dashboard — see `monitor/prop_firm_simulator.py`, `scripts/dash/run_dashboard.py`, `scripts/research/analyze_mfe_mae.py` |
 | **4: Evidence Collection** | ✅ 104 trades reached (2026-08-16) | 100-trade gate RUN — 2/3 automated criteria passed; continue to 200 for DSR |
 
-## D4 Paper Trader Performance 🏆
+## D4 Performance 🏆
 
 **Service**: `aurum1-d4-paper.service` — Donchian 20, 2R exit, BUY+SELL, no filters.
+**Execution (2026-09-28 →)**: OANDA **practice (demo)** account — real REST orders via
+`--broker oanda`, record in `oanda_practice.sqlite3`. Paper record below is the retired
+evidence trail that passed the 200-trade DSR gate.
 
 | Metric | Value |
 |--------|-------|
 | Started | 2026-07-02 (first trade) |
-| **Trades (DB)** | **148 closed** (2026-09-03) |
-| **Win Rate** | **52.0%** |
-| **Net PnL** | **+$1,655** |
-| **Avg R** | **+0.56R** (t=+4.47, significant) |
-| **Profit Factor** | **2.15** |
-| **Equity** | **~$11,810** (+18.1%) |
-| **Max Drawdown** | **1.64%** (snapshot-derived) |
-| **100-Trade Gate** | **RUN 2026-08-16 — 2/3 automated criteria passed** (see below) |
-| **Under-Risk Assessment** | **2026-09-04 — not a bug; sizing stays until 200-trade DSR** (see Performance Assessment doc) |
+| **Paper record (final)** | **205 closed**, **PF 2.08**, **+$2,157 net**, equity **$12,312 (+23%)** |
+| **Win Rate** | **51.2%** (105W / 100L) |
+| **Avg R** | **+0.53** |
+| **Max Drawdown** | **~1.6%** (vs 15% risk gate threshold) |
+| **200-Trade DSR Gate (2026-09-28)** | **2/3 automated criteria passed** (Sharpe-band + PF); raw DSR 0.33 is a deflation-pool artifact (4 same-family trials; rho-adj DSR 1.00, walk-forward DSR 0.997) |
+| **50-Trade Gate** | ✅ PASSED (4/4 criteria) |
+| **100-Trade Gate** | ✅ RUN (2026-08-16) — 2/3 automated criteria passed |
+| **Under-Risk Assessment** | 2026-09-04 — not a bug; sizing held until 200-trade DSR |
 | **Data Source** | Local cache (OANDA → forward-shadow → D4) |
 
 ### Validation Results (Post-Cleanup, 2026-07-18)

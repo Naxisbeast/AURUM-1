@@ -510,8 +510,10 @@ def load_trade_log(db_path: str, settings: dict | None = None) -> pd.DataFrame:
                     "status", "regime", "signal_score", "rejection_reason", "rr", "payload"]
             return raw[cols].dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
-    # Fallback: legacy aurum1 trades_log
-    if path.exists():
+    # Fallback: legacy aurum1 trades_log — ONLY when no trading-record DB exists.
+    # (If the configured trading DB exists but is empty, that's the authoritative
+    # record — showing 0 trades is correct, not falling back to the old audit log.)
+    if not paper_db.exists() and path.exists():
         with closing(sqlite3.connect(path)) as conn:
             try:
                 raw = pd.read_sql_query(
