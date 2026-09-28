@@ -16,6 +16,7 @@ Environment=OANDA_ENV=practice
 # data service MUST keep ALLOW_OANDA_ORDERS unset (it refuses true).
 Environment=ALLOW_OANDA_ORDERS=true
 Environment=ALLOW_LIVE_TRADING=false
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --broker oanda --poll-seconds 60
 Restart=on-failure
 RestartSec=30
