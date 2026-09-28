@@ -48,16 +48,26 @@ def main() -> None:
     events = load_event_log(db_path)
     status = get_system_status(db_path, settings)
 
+    # Parallel paper-shadow record (continues the 205-trade evidence trail alongside
+    # the OANDA practice record, via aurum1-d4-paper-shadow.service).
+    paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
+    paper_equity_curve = load_equity_curve(str(paper_db)).tail(max_rows)
+    paper_trades = load_trade_log(str(paper_db))
+    paper_status = {
+        "equity": float(paper_equity_curve["equity"].iloc[-1]) if not paper_equity_curve.empty else 0.0,
+        "trade_count": len(paper_trades),
+    }
+
     st.title("AURUM-1 Live Monitor")
-    render_status_bar(status)
+    render_status_bar(status, paper_status)
     render_evidence_progress()
-    render_equity_curve(equity_curve, settings)
+    render_equity_curve(equity_curve, settings, paper_equity_curve)
     render_trade_chart(equity_curve, trades, settings)
     render_rolling_metrics(equity_curve, trades, window_days)
     render_open_positions(db_path, settings)
     render_signal_monitor(trades, events, status)
     render_system_health(db_path, settings)
-    render_trade_log(trades)
+    render_trade_log(trades, paper_trades)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
 
 
@@ -88,7 +98,7 @@ def render_evidence_progress() -> None:
         st.success("200 trades reached — DSR gate due! Run run_100_trade_gate.py against a fresh DB snapshot.")
 
 
-def render_status_bar(status: dict[str, Any]) -> None:
+def render_status_bar(status: dict[str, Any], paper_status: dict[str, Any] | None = None) -> None:
     mode = str(status.get("system_mode", "STOPPED"))
     color = "#22c55e" if mode in ("LIVE", "OANDA PRACTICE") else "#facc15" if mode == "PAPER" else "#ef4444"
     last_candle = _format_timestamp(status.get("last_candle_processed"))
@@ -111,30 +121,39 @@ def render_status_bar(status: dict[str, Any]) -> None:
           <span>Blackout: <strong style="color:{'#f87171' if blackout == 'YES' else 'inherit'};">{blackout}</strong></span>
           <span>Daily kill switch: <strong style="color:{'#f87171' if daily_kill == 'TRIGGERED' else 'inherit'};">{daily_kill}</strong></span>
           <span>Total drawdown kill: <strong style="color:{'#f87171' if dd_kill == 'TRIGGERED' else 'inherit'};">{dd_kill}</strong></span>
+          {f'<span>Paper shadow: <strong>${paper_status.get("equity", 0.0):,.2f}</strong> ({paper_status.get("trade_count", 0)} trades)</span>' if paper_status else ''}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_equity_curve(equity_curve: pd.DataFrame, settings: dict[str, Any]) -> None:
+def render_equity_curve(equity_curve: pd.DataFrame, settings: dict[str, Any],
+                        paper_curve: pd.DataFrame | None = None) -> None:
     st.subheader("Equity Curve")
-    if equity_curve.empty:
+    if equity_curve.empty and (paper_curve is None or paper_curve.empty):
         st.info("No equity history yet.")
         return
     drawdown = compute_drawdown_curve(equity_curve)
-    initial_equity = float(settings.get("broker", {}).get("paper_initial_equity", equity_curve["equity"].iloc[0]))
+    initial_equity = float(settings.get("broker", {}).get("paper_initial_equity", equity_curve["equity"].iloc[0] if not equity_curve.empty else 10000.0))
     fig = make_subplots(
         rows=2,
         cols=1,
         shared_xaxes=True,
         row_heights=[0.7, 0.3],
         vertical_spacing=0.08,
-        subplot_titles=("Equity Curve - AURUM-1", "Drawdown %"),
+        specs=[[{"secondary_y": True}], [{}]],
+        subplot_titles=("Equity Curve - AURUM-1 (Practice + Paper shadow)", "Drawdown %"),
     )
-    fig.add_trace(go.Scatter(x=equity_curve["timestamp"], y=equity_curve["equity"], mode="lines", name="Equity", line=dict(color="#2563eb")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=equity_curve["timestamp"], y=[initial_equity] * len(equity_curve), mode="lines", name="Initial Equity", line=dict(color="#16a34a", dash="dash")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown * 100.0, fill="tozeroy", mode="lines", name="Drawdown %", line=dict(color="#dc2626")), row=2, col=1)
+    if not equity_curve.empty:
+        fig.add_trace(go.Scatter(x=equity_curve["timestamp"], y=equity_curve["equity"], mode="lines", name="Practice", line=dict(color="#2563eb")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=equity_curve["timestamp"], y=[initial_equity] * len(equity_curve), mode="lines", name="Practice Start", line=dict(color="#16a34a", dash="dash")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=drawdown.index, y=drawdown * 100.0, fill="tozeroy", mode="lines", name="Drawdown %", line=dict(color="#dc2626")), row=2, col=1)
+    if paper_curve is not None and not paper_curve.empty:
+        # Paper shadow on its own right-hand axis (different starting scale).
+        fig.add_trace(go.Scatter(x=paper_curve["timestamp"], y=paper_curve["equity"], mode="lines",
+                                 name="Paper shadow", line=dict(color="#f59e0b")), row=1, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="Paper equity ($)", secondary_y=True, row=1, col=1)
     fig.update_yaxes(title_text="Equity ($)", row=1, col=1)
     fig.update_yaxes(title_text="Drawdown %", row=2, col=1)
     fig.update_layout(height=560, margin=dict(l=20, r=20, t=50, b=30), legend=dict(orientation="h"))
@@ -409,8 +428,18 @@ def render_system_health(db_path: str, settings: dict | None = None) -> None:
                     st.write(f"- {r.get('reason', '?')}: {r.get('count', 0)}x")
 
 
-def render_trade_log(trades: pd.DataFrame) -> None:
-    st.subheader("Trade Log")
+def render_trade_log(trades: pd.DataFrame, paper_trades: pd.DataFrame | None = None) -> None:
+    st.subheader("Trade Log (Practice + Paper shadow)")
+    if paper_trades is not None and not paper_trades.empty:
+        practice = trades.copy()
+        paper = paper_trades.copy()
+        practice["source"] = "PRACTICE"
+        paper["source"] = "PAPER"
+        trades = pd.concat([practice, paper], ignore_index=True).sort_values("timestamp").reset_index(drop=True)
+    else:
+        trades = trades.copy()
+        if not trades.empty:
+            trades["source"] = "PRACTICE"
     if trades.empty:
         st.info("No trade records yet.")
         return
@@ -452,9 +481,9 @@ def render_trade_log(trades: pd.DataFrame) -> None:
     shown["PnL $"] = shown["pnl"].apply(lambda x: f"${x:+.2f}")
     shown["Time"] = shown["timestamp"].dt.strftime("%m/%d %H:%M")
 
-    display_cols = ["Time", "direction", "Entry $", "Exit $", "R", "PnL $", "Result", "rejection_reason"]
+    display_cols = ["Time", "source", "direction", "Entry $", "Exit $", "R", "PnL $", "Result", "rejection_reason"]
     display_map = {
-        "Time": "Time", "direction": "Dir", "Entry $": "Entry",
+        "Time": "Time", "source": "Source", "direction": "Dir", "Entry $": "Entry",
         "Exit $": "Exit", "R": "R", "PnL $": "PnL",
         "Result": "", "rejection_reason": "Reason"
     }

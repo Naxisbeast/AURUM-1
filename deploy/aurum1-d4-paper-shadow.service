@@ -1,0 +1,23 @@
+[Unit]
+Description=AURUM-1 D4 paper shadow — parallel in-memory sim alongside OANDA practice
+Documentation=https://github.com/Naxisbeast/AURUM-1
+After=network-online.target aurum1-forward-shadow.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum1
+Group=aurum1
+WorkingDirectory=/opt/aurum1
+Environment=OANDA_ENV=practice
+Environment=ALLOW_OANDA_ORDERS=false
+Environment=ALLOW_LIVE_TRADING=false
+Environment=PYTHONUNBUFFERED=1
+# Paper shadow continues the paper evidence trail (paper_trading.sqlite3) in parallel
+# with the OANDA practice trader. Distinct PID + health files so the two don't collide.
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --broker paper --poll-seconds 60 --pid-file run/d4_paper_shadow.pid --health-file run/d4_paper_shadow_health.json
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

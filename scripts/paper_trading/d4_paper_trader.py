@@ -983,12 +983,17 @@ class D4PaperTrader:
         print(f"{'='*60}\n")
 
 
-def _acquire_pid_lock() -> bool:
-    """Create PID file. Return True if acquired, False if another instance is running."""
-    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _acquire_pid_lock(pid_file: Path | None = None, force: bool = False) -> bool:
+    """Create PID file. Return True if acquired, False if another instance is running.
+
+    `pid_file` allows a distinct lock per instance (e.g. the paper shadow alongside
+    the OANDA practice trader). `force` bypasses the live-process check.
+    """
+    lock = pid_file or PID_FILE
+    lock.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if PID_FILE.exists():
-            pid_str = PID_FILE.read_text().strip()
+        if lock.exists() and not force:
+            pid_str = lock.read_text().strip()
             if pid_str:
                 try:
                     pid = int(pid_str)
@@ -999,7 +1004,7 @@ def _acquire_pid_lock() -> bool:
                 except (OSError, ValueError):
                     # Stale PID file — process is dead
                     pass
-        PID_FILE.write_text(str(os.getpid()))
+        lock.write_text(str(os.getpid()))
         return True
     except Exception as exc:
         print(f"WARNING: Could not acquire PID lock: {exc}")
@@ -1007,11 +1012,12 @@ def _acquire_pid_lock() -> bool:
         return True
 
 
-def _release_pid_lock():
+def _release_pid_lock(pid_file: Path | None = None):
     """Remove PID file if owned by this process."""
+    lock = pid_file or PID_FILE
     try:
-        if PID_FILE.exists() and PID_FILE.read_text().strip() == str(os.getpid()):
-            PID_FILE.unlink()
+        if lock.exists() and lock.read_text().strip() == str(os.getpid()):
+            lock.unlink()
     except Exception:
         pass  # PID file removal is best-effort
 
@@ -1026,13 +1032,25 @@ def main():
                         "(real OANDA practice/live account). OANDA mode requires "
                         "ALLOW_OANDA_ORDERS=true (and ALLOW_LIVE_TRADING=true + "
                         "OANDA_ENV=live for live).")
+    p.add_argument("--pid-file", type=Path, default=None,
+                   help="Override the PID-lock file (default run/d4_paper_trader.pid). "
+                        "Lets a paper shadow run alongside the OANDA practice trader.")
+    p.add_argument("--health-file", type=Path, default=None,
+                   help="Override the health file (default run/d4_paper_trader_health.json).")
     args = p.parse_args()
 
-    # Single-instance protection
-    if not _acquire_pid_lock():
+    settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
+    pt = settings.setdefault("paper_trading", {})
+    if args.pid_file:
+        pt["pid_file"] = str(args.pid_file)
+    if args.health_file:
+        pt["health_file"] = str(args.health_file)
+    pid_file = Path(pt["pid_file"]) if pt.get("pid_file") else None
+
+    # Single-instance protection (per-instance pid file for the shadow)
+    if not _acquire_pid_lock(pid_file, force=args.force):
         return 1
 
-    settings = load_settings(ROOT / "aurum1" / "config" / "settings.yaml")
     if args.broker == "paper":
         # Ensure paper mode
         settings.setdefault("broker", {})["paper_trade"] = True
@@ -1052,7 +1070,7 @@ def main():
     # Fail-fast: requested broker must match engine routing
     if bool(settings.get("broker", {}).get("paper_trade", True)) != (args.broker == "paper"):
         print("ERROR: broker routing mismatch — requested --broker %s" % args.broker, file=sys.stderr)
-        _release_pid_lock()
+        _release_pid_lock(pid_file)
         return 1
 
     trader = D4PaperTrader(settings)
@@ -1070,7 +1088,7 @@ def main():
         else:
             trader.run_loop(poll_seconds=args.poll_seconds)
     finally:
-        _release_pid_lock()
+        _release_pid_lock(pid_file)
 
     return 0
 

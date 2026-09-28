@@ -104,6 +104,13 @@ The D4 unit loads OANDA credentials from `EnvironmentFile=/opt/aurum1/.env`
 the practice record, set `paper_trading.db_path` in the server's `settings.yaml`
 (e.g. `aurum1/data/oanda_practice.sqlite3`).
 
+**Parallel paper shadow**: `aurum1-d4-paper-shadow.service` runs `--broker paper`
+alongside the OANDA practice trader, continuing the paper evidence trail in
+`paper_trading.sqlite3` for side-by-side comparison. It uses a distinct PID + health
+file (`--pid-file run/d4_paper_shadow.pid --health-file run/d4_paper_shadow_health.json`)
+so the two instances never collide. The dashboard shows both records (Practice +
+Paper shadow) on the equity chart and trade log.
+
 ### Shadow Timer Services (D1-D6 Comparison)
 
 ```bash

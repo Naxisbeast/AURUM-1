@@ -280,8 +280,8 @@ def test_main_broker_flag_routes_paper(monkeypatch: pytest.MonkeyPatch, tmp_path
     settings["broker"]["paper_trade"] = True
 
     captured: dict = {}
-    monkeypatch.setattr(mod, "_acquire_pid_lock", lambda: True)
-    monkeypatch.setattr(mod, "_release_pid_lock", lambda: None)
+    monkeypatch.setattr(mod, "_acquire_pid_lock", lambda *a, **k: True)
+    monkeypatch.setattr(mod, "_release_pid_lock", lambda *a, **k: None)
     monkeypatch.setattr(mod, "load_settings", lambda *a, **k: settings)
 
     class FakeTrader:
