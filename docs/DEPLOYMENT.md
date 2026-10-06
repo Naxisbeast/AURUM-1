@@ -72,15 +72,21 @@ systemctl status aurum1-forward-shadow.service
 The autonomous trading service. Reads from the forward shadow's market cache, executes
 Donchian 2R BUY+SELL trades, and persists to a trading-record SQLite DB.
 
-Broker mode is selected with `--broker`:
-- `--broker paper` (default): in-memory `PaperBroker`, persists to `paper_trading.sqlite3`
-  (the 205-trade DSR evidence trail).
-- `--broker oanda`: real OANDA execution on the practice (demo) account via `OandaBroker`
-  (MARKET orders with SL/TP rebased around the live price; server-side SL/TP; closes
-  polled from OANDA and reconstructed with R). Persists to `oanda_practice.sqlite3` so
-  the paper evidence stays clean.
+**Current mode: paper-primary with honest fills.** The OANDA practice experiment was
+retired 2026-10-06 — every demo trade lost, and the review showed the historical paper
+record (PF 2.08) was inflated by a lookahead entry (fill at the signal candle's *open*).
+The sim now fills at the signal *close*, so the paper record reflects realistic execution.
+A 45-minute freshness gate (`execution.max_stale_candle_age_minutes`) refuses entries on a
+stale market cache, and real server-side SL/TP are recorded.
 
-The deployed service runs OANDA practice mode:
+Broker mode is selected with `--broker`:
+- `--broker paper` (default, deployed): in-memory `PaperBroker`, persists to
+  `paper_trading.sqlite3`. **Honest fills** (signal close, not candle open).
+- `--broker oanda`: optional real OANDA execution on the practice (demo) account via
+  `OandaBroker` (MARKET orders, server-side SL/TP, closes polled and reconstructed).
+  Persists to `oanda_practice.sqlite3`. Not deployed — the practice experiment is retired.
+
+The deployed service runs paper mode (`deploy/aurum1-d4-paper.service` → `--broker paper`):
 ```bash
 # Deploy the systemd service
 sudo cp deploy/aurum1-d4-paper.service /etc/systemd/system/
@@ -97,19 +103,14 @@ journalctl -u aurum1-d4-paper.service -f
 journalctl -u aurum1-d4-paper.service -n 50 --no-pager | grep -E 'ENTRY|EXIT|EQ='
 ```
 
-The D4 unit loads OANDA credentials from `EnvironmentFile=/opt/aurum1/.env`
-(`OANDA_API_KEY`, `OANDA_ACCOUNT_ID`) and sets `ALLOW_OANDA_ORDERS=true` with
-`OANDA_ENV=practice` / `ALLOW_LIVE_TRADING=false`. The **forward-shadow unit must keep
-`ALLOW_OANDA_ORDERS` unset** — it refuses to run with it true. To point the dashboard at
-the practice record, set `paper_trading.db_path` in the server's `settings.yaml`
-(e.g. `aurum1/data/oanda_practice.sqlite3`).
+The paper unit runs with `ALLOW_OANDA_ORDERS=false` (the paper trader never routes to
+OANDA). The dashboard resolves its primary record from `paper_trading.db_path` in the
+server's `settings.yaml` (currently `aurum1/data/paper_trading.sqlite3`).
 
-**Parallel paper shadow**: `aurum1-d4-paper-shadow.service` runs `--broker paper`
-alongside the OANDA practice trader, continuing the paper evidence trail in
-`paper_trading.sqlite3` for side-by-side comparison. It uses a distinct PID + health
-file (`--pid-file run/d4_paper_shadow.pid --health-file run/d4_paper_shadow_health.json`)
-so the two instances never collide. The dashboard shows both records (Practice +
-Paper shadow) on the equity chart and trade log.
+**Paper shadow (disabled)**: `aurum1-d4-paper-shadow.service` runs `--broker paper`
+with a distinct PID + health file, for side-by-side comparison with the primary record.
+It is **disabled** in the current paper-primary deployment (a single paper writer avoids
+DB collision); the unit file remains in the repo for future use.
 
 ### Shadow Timer Services (D1-D6 Comparison)
 

@@ -666,6 +666,35 @@ def test_oanda_broker_market_submit_extracts_trade_id(monkeypatch) -> None:
     assert result.raw_response["tradeID"] == "777"
 
 
+def test_oanda_market_submit_returns_rebased_sl_tp(monkeypatch) -> None:
+    """MARKET submit returns the rebased server SL/TP in the OrderResult."""
+    monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")
+    broker = OandaBroker(settings_for(Path("unused.sqlite3"), {
+        "broker": {"paper_trade": False},
+        "execution": {"oanda_order_type": "market"},
+    }))
+    broker.get_current_spread_pips = lambda instrument: 1.0  # type: ignore[method-assign]
+    broker._current_market_price = lambda: 2330.0  # type: ignore[method-assign]
+    broker._pricing = lambda instrument: {  # type: ignore[method-assign]
+        "prices": [{"bids": [{"price": "2331.0"}], "asks": [{"price": "2331.5"}]}]
+    }
+    broker._submit_limit_order = lambda data: {  # type: ignore[method-assign]
+        "orderFillTransaction": {
+            "id": "999", "price": "2331.5", "time": "2026-01-01T12:00:00Z",
+            "tradeOpened": {"tradeID": "777"},
+        }
+    }
+    order = make_risk_order(direction="BUY", entry_price=2330.0, stop_loss=2320.0, take_profit=2345.0)
+    order.units = 10.0
+
+    result = broker.submit_order(order)
+
+    assert result.success is True
+    # ask 2331.5; sl = ask - 10.0 = 2321.5 ; tp = ask + 15.0 = 2346.5
+    assert result.stop_loss == pytest.approx(2321.5)
+    assert result.take_profit == pytest.approx(2346.5)
+
+
 def test_oanda_broker_price_collar_rejects_far_entry(monkeypatch) -> None:
     """OandaBroker rejects an entry far from the current market (mirrors PaperBroker)."""
     monkeypatch.setenv("ALLOW_OANDA_ORDERS", "true")

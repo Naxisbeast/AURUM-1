@@ -36,6 +36,24 @@
 > (separate from the paper evidence). Prerequisite: a valid practice account ID in the
 > server `.env` (the current one was rejected by OANDA).
 
+> **2026-10-06 — practice experiment retired; back to honest paper-primary**: end-to-end
+> review found every OANDA practice trade lost because (1) the trader fired MARKET orders
+> off a **stale market cache** (the forward-shadow feed freezes silently; `_refresh_data`
+> only warned), (2) entries chased the breakout **one bar late**, and (3) `_open_meta`
+> recorded **candle-open SL/TP** instead of the real server levels. Fixed + deployed
+> (freshness gate `execution.max_stale_candle_age_minutes=45`, act-on-newest-candle,
+> real SL/TP, real health candle-age). On review, the deeper truth: the **paper record
+> (PF 2.08) was inflated by a lookahead entry** — the sim filled at the signal candle's
+> *open* (a price from before the breakout confirmed). The practice account was the first
+> honest execution and showed the real (marginal, ~PF 1.14) edge. **Decision: retire the
+> OANDA practice account, return to paper-primary**, and fix the paper sim to fill at the
+> signal **close** (honest). Deployed: `aurum1-d4-paper.service` now runs `--broker paper`
+> (watchdog target + health file unchanged), `aurum1-d4-paper-shadow.service` disabled
+> (single paper writer), dashboard treats the paper record as primary, settings
+> `broker.paper_trade=true` + `paper_trading.db_path=paper_trading.sqlite3`. New honest
+> numbers going forward: the paper record now reflects realistic fills (expect it to look
+> materially worse than the historical PF 2.08 — that is the truth).
+
 ## 2026-08-28 Maintenance — Deploy Gap + Weekly Report Fix
 
 **Symptom**: `aurum1-d4-shadow.service` failing every 15 min (2,353 failures since Aug 1);

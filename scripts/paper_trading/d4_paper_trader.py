@@ -56,6 +56,13 @@ class D4PaperTrader:
         self.market_db = Path(pt.get("market_db_path", MARKET_DB))
         self.health_file = Path(pt.get("health_file", HEALTH_FILE))
         self.spec = InstrumentSpec.from_settings(settings)
+        # Entries are refused when the newest completed candle is older than this
+        # (dead feed / replay after a restart). M15 candles are ~15-18 min old when
+        # processed, so 45 min tolerates fetch/poll latency while still blocking a
+        # frozen feed. Weekends are exempt (no candles form on a closed market).
+        self._max_stale_candle_age_minutes = float(
+            settings.get("execution", {}).get("max_stale_candle_age_minutes", 45)
+        )
         # NOTE: Slippage and spread are handled by PaperBroker (in the broker
         # module) using Gaussian slippage and session-aware spread estimation.
         # No hardcoded slippage constants needed here.
@@ -91,6 +98,14 @@ class D4PaperTrader:
         self._peak_equity_30d = 0.0
         self._last_data_ts = datetime.now(UTC)
         self._stale_warning_logged = False
+        # Real age (minutes) of the newest completed candle, and the candle ts it
+        # refers to. Set by _refresh_data. Drives the health-file stale field (the
+        # watchdog's stale-data kill) and the entry freshness gate.
+        self._latest_candle_age_minutes: float | None = None
+        self._latest_candle_ts = None
+        # True while the freshness gate is actively blocking entries (rate-limits
+        # the stale_data missed-signal log / alert to once per stale episode).
+        self._stale_entry_blocked = False
         self._snapshot_counter = 0
         self._init_paper_db()
 
@@ -534,12 +549,26 @@ class D4PaperTrader:
                 "avg_latency_seconds": round(avg_latency, 3),
                 "min_latency_seconds": round(min_latency, 3),
                 "max_latency_seconds": round(self._latency_max, 3),
-                "market_latest_candle_age_minutes": round((datetime.now(UTC) - self._last_data_ts).total_seconds() / 60.0, 1),
+                "market_latest_candle_age_minutes": (round(self._latest_candle_age_minutes, 1)
+                                                     if self._latest_candle_age_minutes is not None else None),
             }
             self.health_file.parent.mkdir(parents=True, exist_ok=True)
             self.health_file.write_text(json.dumps(health, indent=2, default=str))
         except Exception as exc:
             print(f"  Health file error (non-critical): {exc}")
+
+    def _is_market_paused(self, now: datetime | None = None) -> bool:
+        """True during the weekly market pause (Fri 22:00 UTC → Mon 01:00 UTC).
+
+        During this window no M15 candles form, so candle age must not be treated
+        as staleness. Shared by the _refresh_data warning and the entry gate.
+        """
+        now = now or datetime.now(UTC)
+        return (
+            now.weekday() >= 5
+            or (now.weekday() == 4 and now.hour >= 22)
+            or (now.weekday() == 0 and now.hour < 1)
+        )
 
     def _refresh_data(self):
         """Read latest M15 candles from the forward shadow market cache."""
@@ -563,8 +592,11 @@ class D4PaperTrader:
             # Stale data detection: alert if latest candle > 2 hours old during market hours
             now = datetime.now(UTC)
             age_minutes = (now - new_latest.to_pydatetime().replace(tzinfo=UTC)).total_seconds() / 60.0
-            is_weekend = now.weekday() >= 5 or (now.weekday() == 4 and now.hour >= 22) or (now.weekday() == 0 and now.hour < 1)
-            if age_minutes > 120 and not is_weekend:
+            # Record the REAL candle age (not the cache-read time) so the health
+            # file and the watchdog's stale-data kill reflect actual freshness.
+            self._latest_candle_age_minutes = age_minutes
+            self._latest_candle_ts = new_latest
+            if age_minutes > 120 and not self._is_market_paused(now):
                 if not self._stale_warning_logged:
                     print(f"  WARNING: Stale market data — latest candle is {age_minutes:.0f} minutes old ({new_latest})")
                     self._stale_warning_logged = True
@@ -715,6 +747,31 @@ class D4PaperTrader:
         if self.features.empty or ts not in self.features.index:
             return
 
+        # Freshness gate: never enter on a stale candle. This is the primary guard
+        # against a dead market cache — the 5% price collar only catches large
+        # divergence, not a frozen-but-close feed. Close-polling above still runs,
+        # so open positions keep closing; only entries are blocked. Weekends are
+        # exempt (no candles form during the market pause).
+        now_utc = datetime.now(UTC)
+        ts_dt = ts.to_pydatetime()
+        if ts_dt.tzinfo is None:
+            ts_dt = ts_dt.replace(tzinfo=UTC)
+        candle_age_min = (now_utc - ts_dt).total_seconds() / 60.0
+        if candle_age_min > self._max_stale_candle_age_minutes and not self._is_market_paused(now_utc):
+            if not self._stale_entry_blocked:
+                self._stale_entry_blocked = True
+                self._missed_signals += 1
+                ts_str = ts.strftime("%Y-%m-%dT%H:%M:%S+00:00") if hasattr(ts, "strftime") else str(ts)
+                self._missed_signal_log.append({
+                    "timestamp": ts_str, "direction": "UNKNOWN",
+                    "price": None, "reason": "stale_data",
+                })
+                self._save_missed_signal(ts_str, "UNKNOWN", None, "stale_data")
+                self._send_alert("stale_data", f"Market cache {candle_age_min:.0f} min old — entries blocked (latest {ts})")
+                print(f"  SKIP ENTRY — stale data ({candle_age_min:.0f}m old candle {ts})")
+            return
+        self._stale_entry_blocked = False
+
         feat = self.features.loc[ts]
         atr = float(feat["atr_14"])
         if not math.isfinite(atr) or atr <= 0:
@@ -731,11 +788,15 @@ class D4PaperTrader:
 
         if close > high_20 and math.isfinite(high_20):
             direction = "BUY"
-            entry_price = float(row["open"])  # PaperBroker handles slippage
+            # Entry basis is the SIGNAL close, not the candle's open. Entering at
+            # the open was lookahead (the open predates the breakout that only
+            # confirmed at the close) and inflated the paper record (e.g. +20pt
+            # head starts). The real MARKET fill lands ≈ the close / next open.
+            entry_price = close  # PaperBroker adds adverse slippage on fill
             stop_loss = entry_price - 2.0 * atr
         elif close < low_20 and math.isfinite(low_20):
             direction = "SELL"
-            entry_price = float(row["open"])  # PaperBroker handles slippage
+            entry_price = close  # PaperBroker adds adverse slippage on fill
             stop_loss = entry_price + 2.0 * atr
 
         if direction is None or stop_loss is None:
@@ -749,7 +810,7 @@ class D4PaperTrader:
 
         # Risk distance from entry price (PaperBroker adds Gaussian slippage on fill)
         # 2R exit: TP at +2x risk distance, SL at -1x risk distance
-        raw_entry = float(row["open"])
+        raw_entry = close
         raw_stop = raw_entry - 2.0 * atr if direction == "BUY" else raw_entry + 2.0 * atr
         risk_dist = abs(raw_entry - raw_stop)
         take_profit = raw_entry + 2.0 * risk_dist if direction == "BUY" else raw_entry - 2.0 * risk_dist
@@ -829,8 +890,11 @@ class D4PaperTrader:
             "direction": direction,
             "intended_entry": float(instruction.entry_price),
             "actual_entry": float(result.fill_price) if result.fill_price is not None else float(instruction.entry_price),
-            "stop_loss": float(stop_loss),
-            "take_profit": float(take_profit),
+            # Record the REAL server-side SL/TP (for OANDA MARKET orders these are
+            # rebased around the live fill, not the stale candle-open levels), so
+            # open_positions / dashboard / close reconstruction show the truth.
+            "stop_loss": float(result.stop_loss) if result.stop_loss is not None else float(stop_loss),
+            "take_profit": float(result.take_profit) if result.take_profit is not None else float(take_profit),
             "units": units_value,
             "lot_size": float(risk_order.lot_size) if risk_order.lot_size else 0.0,
             "risk_amount": float(risk_order.risk_amount) if risk_order.risk_amount else 0.0,
@@ -856,24 +920,26 @@ class D4PaperTrader:
             self._last_processed_ts = self.ohlcv_buffer.index[-2]  # leave current as incomplete
             self.process_candle(self.ohlcv_buffer.iloc[-2], pd.Timestamp(self.ohlcv_buffer.index[-2]), len(self.ohlcv_buffer) - 2)
         else:
-            # Process all candles newer than last processed
+            # Process all candles newer than last processed. The forward-shadow
+            # market cache only ever contains COMPLETED candles (OANDA returns
+            # closed candles; the forming one is never persisted), so the newest
+            # row is safe to act on immediately. Previously the last row was left
+            # unprocessed, which delayed each signal by a full M15 bar and filled
+            # MARKET orders ~30 min after the breakout (chasing the next-next
+            # open). The freshness gate still blocks entries on stale candles.
             new_mask = self.ohlcv_buffer.index > self._last_processed_ts
             new_indices = self.ohlcv_buffer.index[new_mask]
 
-            # Don't process the last index (current candle may still be forming)
-            if len(new_indices) > 1:
-                for i in range(len(new_indices) - 1):
-                    ts = new_indices[i]
-                    idx = self.ohlcv_buffer.index.get_loc(ts)
-                    try:
-                        self.process_candle(self.ohlcv_buffer.iloc[idx], pd.Timestamp(ts), idx)
-                    except Exception as exc:
-                        print(f"  Candle processing error at {ts}: {exc}")
-                self._last_processed_ts = new_indices[-2]
-                self._save_last_processed_ts(new_indices[-2])
-            elif len(new_indices) == 1:
-                # At most 1 new bar, likely the current incomplete one — leave it
-                pass
+            for i in range(len(new_indices)):
+                ts = new_indices[i]
+                idx = self.ohlcv_buffer.index.get_loc(ts)
+                try:
+                    self.process_candle(self.ohlcv_buffer.iloc[idx], pd.Timestamp(ts), idx)
+                except Exception as exc:
+                    print(f"  Candle processing error at {ts}: {exc}")
+            if len(new_indices):
+                self._last_processed_ts = new_indices[-1]
+                self._save_last_processed_ts(new_indices[-1])
 
     def run_loop(self, poll_seconds: float = 60.0):
         """Continuous trading loop. Polls for new candles every `poll_seconds`."""

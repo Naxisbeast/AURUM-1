@@ -40,6 +40,10 @@ def settings_for(tmp_path: Path, market_db_path: Path) -> dict:
             "paper_spread_pips": 1.5,
             "slippage_std_pips": 0.0,
             "oanda_order_type": "market",
+            # Existing tests use 2026-01-01 candles (months old, ~4e5 min);
+            # keep the freshness gate effectively off here. Dedicated tests
+            # override this with a real threshold.
+            "max_stale_candle_age_minutes": 1e9,
         },
         "risk": {
             "pip_size": 0.01,
@@ -270,6 +274,141 @@ def test_d4_oanda_restore_meta_reconstructs_r(monkeypatch: pytest.MonkeyPatch, t
     assert row[0] == "777"
     assert row[1] == pytest.approx(-1.0, rel=1e-3)
     assert row[2] == "stop_loss"
+
+
+def test_freshness_gate_blocks_stale_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A cache whose newest candle is old → entries blocked, stale_data logged."""
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    _mock_oanda(monkeypatch, [])
+    # Force the gate to apply even if the suite happens to run on a weekend.
+    monkeypatch.setattr(D4PaperTrader, "_is_market_paused", lambda self, now=None: False)
+    settings = settings_for(tmp_path, tmp_path / "market.sqlite3")
+    settings["execution"]["max_stale_candle_age_minutes"] = 45
+    # Candles end ~2h ago; the breakout bar iloc[-2] is >45 min stale.
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=300 * 15 + 120)
+    write_cache(tmp_path / "market.sqlite3", _breakout_frame(start, 300, 298))
+
+    trader = D4PaperTrader(settings)
+    trader.run_once()
+
+    assert not trader._open_meta
+    assert trader._missed_signals >= 1
+    with sqlite3.connect(trader._paper_db) as conn:
+        row = conn.execute(
+            "SELECT reason FROM missed_signals ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "stale_data"
+
+
+def test_freshness_gate_allows_fresh_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A cache with a recent newest candle still enters normally."""
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    _mock_oanda(monkeypatch, [])
+    settings = settings_for(tmp_path, tmp_path / "market.sqlite3")
+    settings["execution"]["max_stale_candle_age_minutes"] = 45
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=300 * 15)
+    write_cache(tmp_path / "market.sqlite3", _breakout_frame(start, 300, 298))
+
+    trader = D4PaperTrader(settings)
+    trader.run_once()
+
+    assert "777" in trader._open_meta
+    assert trader._stale_entry_blocked is False
+
+
+def test_run_once_acts_on_newest_closed_candle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The newest completed candle is acted on immediately, not deferred a bar."""
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    _mock_oanda(monkeypatch, [])
+    start = pd.Timestamp("2026-01-01", tz="UTC")
+    # Flat candles with a BUY breakout ONLY on the last bar (iloc[-1]).
+    frame = _flat_frame(start, 300)
+    last = 299
+    frame.iloc[last, frame.columns.get_loc("open")] = 2331.0
+    frame.iloc[last, frame.columns.get_loc("high")] = 2332.0
+    frame.iloc[last, frame.columns.get_loc("low")] = 2330.0
+    frame.iloc[last, frame.columns.get_loc("close")] = 2332.0
+    write_cache(tmp_path / "market.sqlite3", frame)
+
+    trader = D4PaperTrader(settings_for(tmp_path, tmp_path / "market.sqlite3"))
+    trader.run_once()
+    assert not trader._open_meta  # first run acts on iloc[-2] (flat)
+
+    trader.run_once()
+    assert "777" in trader._open_meta  # iloc[-1] breakout acted on next cycle
+
+
+def test_health_reports_real_candle_age(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """market_latest_candle_age_minutes reflects the real candle age, not ~0."""
+    import json
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    _mock_oanda(monkeypatch, [])
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=300 * 15 + 15)
+    write_cache(tmp_path / "market.sqlite3", _flat_frame(start, 300))
+
+    trader = D4PaperTrader(settings_for(tmp_path, tmp_path / "market.sqlite3"))
+    assert trader._latest_candle_age_minutes is not None
+    trader._write_health_file()
+    data = json.loads(Path(trader.health_file).read_text())
+    assert data["market_latest_candle_age_minutes"] == pytest.approx(
+        trader._latest_candle_age_minutes, rel=0.05
+    )
+    assert data["market_latest_candle_age_minutes"] > 5  # not ~0 (dead health field)
+
+
+def test_oanda_market_entry_records_rebased_sl_tp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Trader's open-meta records the server-rebased SL/TP, not candle-open levels."""
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    _mock_oanda(monkeypatch, [])
+    start = pd.Timestamp("2026-01-01", tz="UTC")
+    write_cache(tmp_path / "market.sqlite3", _breakout_frame(start, 300, 298))
+
+    trader = D4PaperTrader(settings_for(tmp_path, tmp_path / "market.sqlite3"))
+    trader.run_once()
+    meta = trader._open_meta["777"]
+    assert meta["direction"] == "BUY"
+
+    ts = start + pd.Timedelta(minutes=298 * 15)
+    atr = float(trader.features.loc[ts, "atr_14"])
+    naive_sl = 2341.0 - 2.0 * atr  # the (wrong) candle-open-based level
+    naive_tp = 2341.0 + 4.0 * atr
+    # _mock_oanda pricing: ask 2341.02, so the rebase shifts levels +0.02.
+    assert meta["stop_loss"] == pytest.approx(naive_sl + 0.02, rel=1e-3)
+    assert meta["take_profit"] == pytest.approx(naive_tp + 0.02, rel=1e-3)
+
+
+def test_paper_entry_uses_close_not_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Paper sim fills at the signal candle's CLOSE (honest), not its open (lookahead)."""
+    from scripts.paper_trading.d4_paper_trader import D4PaperTrader
+
+    start = pd.Timestamp("2026-01-01", tz="UTC")
+    # Breakout candle with open (2335) != close (2341) — an up candle.
+    frame = _flat_frame(start, 300)
+    spike = 297
+    frame.iloc[spike, frame.columns.get_loc("high")] = 2340.0
+    frame.iloc[spike, frame.columns.get_loc("close")] = 2340.0
+    b = 298
+    frame.iloc[b, frame.columns.get_loc("open")] = 2335.0
+    frame.iloc[b, frame.columns.get_loc("high")] = 2342.0
+    frame.iloc[b, frame.columns.get_loc("low")] = 2334.0
+    frame.iloc[b, frame.columns.get_loc("close")] = 2341.0
+    write_cache(tmp_path / "market.sqlite3", frame)
+
+    settings = settings_for(tmp_path, tmp_path / "market.sqlite3")
+    settings["broker"]["paper_trade"] = True  # route to PaperBroker (in-memory sim)
+    trader = D4PaperTrader(settings)
+    trader.run_once()
+
+    assert trader._open_meta
+    meta = next(iter(trader._open_meta.values()))
+    # slippage_std_pips=0 → fill == entry == close (2341), NOT the candle open (2335).
+    assert meta["actual_entry"] == pytest.approx(2341.0, abs=1e-3)
 
 
 def test_main_broker_flag_routes_paper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

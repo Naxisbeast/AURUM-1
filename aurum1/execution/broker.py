@@ -555,9 +555,16 @@ class OandaBroker(BrokerBase):
                 )
 
         order_type = str(self.execution_settings.get("oanda_order_type", "limit")).lower()
-        data = {"order": self._order_payload(order, order_type=order_type)}
+        order_spec = self._order_payload(order, order_type=order_type)
+        data = {"order": order_spec}
         response = self._submit_limit_order(data)
         fill = response.get("orderFillTransaction") or response.get("orderCreateTransaction", {})
+        # The SL/TP OANDA actually enforces: for MARKET orders these are rebased
+        # around the live fill (_market_order_payload), for LIMIT they equal the
+        # instruction levels. Returning the real values lets the trader record the
+        # truth instead of the stale candle-open-based instruction levels.
+        result_stop = float(order_spec.get("stopLossOnFill", {}).get("price", float(order.instruction.stop_loss)))
+        result_tp = float(order_spec.get("takeProfitOnFill", {}).get("price", float(order.instruction.take_profit)))
         if "orderFillTransaction" not in response:
             return OrderResult(
                 success=False,
@@ -566,8 +573,8 @@ class OandaBroker(BrokerBase):
                 fill_time=None,
                 lot_size=float(order.lot_size),
                 direction=order.instruction.direction,
-                stop_loss=float(order.instruction.stop_loss),
-                take_profit=float(order.instruction.take_profit),
+                stop_loss=result_stop,
+                take_profit=result_tp,
                 rejection_reason="fill_timeout",
                 broker="oanda",
                 raw_response=response,
@@ -591,8 +598,8 @@ class OandaBroker(BrokerBase):
             fill_time=fill_time,
             lot_size=float(order.lot_size),
             direction=order.instruction.direction,
-            stop_loss=float(order.instruction.stop_loss),
-            take_profit=float(order.instruction.take_profit),
+            stop_loss=result_stop,
+            take_profit=result_tp,
             rejection_reason=None,
             broker="oanda",
             raw_response=raw,

@@ -1,5 +1,5 @@
 [Unit]
-Description=AURUM-1 D4 paper trader — autonomous Donchian breakout paper trading
+Description=AURUM-1 D4 paper trader — autonomous Donchian breakout paper trading (honest in-memory sim)
 Documentation=https://github.com/Naxisbeast/AURUM-1
 After=network-online.target
 Wants=network-online.target
@@ -9,15 +9,14 @@ Type=simple
 User=aurum1
 Group=aurum1
 WorkingDirectory=/opt/aurum1
-# OANDA_API_KEY / OANDA_ACCOUNT_ID come from the repo .env (trader does not load dotenv).
 EnvironmentFile=/opt/aurum1/.env
 Environment=OANDA_ENV=practice
-# OANDA practice (demo) broker mode — real execution, demo money. The forward-shadow
-# data service MUST keep ALLOW_OANDA_ORDERS unset (it refuses true).
-Environment=ALLOW_OANDA_ORDERS=true
+# Paper mode: in-memory execution, no OANDA orders. ALLOW_OANDA_ORDERS stays
+# false so the paper trader can never route to the practice account.
+Environment=ALLOW_OANDA_ORDERS=false
 Environment=ALLOW_LIVE_TRADING=false
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --broker oanda --poll-seconds 60
+ExecStart=/opt/aurum1/.venv/bin/python /opt/aurum1/scripts/paper_trading/d4_paper_trader.py --broker paper --poll-seconds 60
 Restart=on-failure
 RestartSec=30
 

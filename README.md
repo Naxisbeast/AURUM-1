@@ -58,9 +58,13 @@ Every failed experiment is archived and documented because knowing why something
 ## Where It Stands
 
 D4 — Donchian 20-bar breakout, 2R exit, BUY+SELL — is the strongest candidate discovered
-through research. It passed the 200-trade gate on its paper record, and as of 2026-09-28 it
-trades on a **real OANDA practice (demo) account** — real order execution on demo money —
-at 0.35% risk per trade, with the architecture kept **broker-agnostic** for future live trading.
+through research. It passed the 200-trade gate on its historical paper record, but an
+end-to-end review (2026-10-06) found that record was **inflated by a lookahead entry**: the
+paper sim filled at the signal candle's *open* (a price from before the breakout confirmed),
+which handed every trade a free head start. A brief OANDA **practice (demo)** experiment
+showed the honest, much-worse performance. **Decision: practice is retired and D4 runs
+paper-primary with a corrected, honest simulation** — the sim now fills at the signal
+*close*, and the paper record reflects realistic execution. No live capital is involved.
 
 | Test | Result |
 |------|--------|
@@ -68,23 +72,22 @@ at 0.35% risk per trade, with the architecture kept **broker-agnostic** for futu
 | Monte Carlo (10,000 simulations) | 0% ruin probability |
 | TC stress (6p spread + 2p slippage) | Still profitable (PF 1.09) |
 | Signal stationarity (ADF test) | ✅ Stationary — not trading noise |
-| **200-trade DSR gate (2026-09-28)** | **2/3 automated criteria passed** on **205 trades** |
-| Paper record (retired) | **205 trades**, **+$2,157 net**, equity **$12,312 (+23%)**, **PF 2.08** |
-| Live win rate | **51.2%** (105W / 100L) |
-| Live avg R | **+0.53** |
-| Max drawdown (lifetime) | ~1.6% (vs 15% risk gate threshold) |
+| 200-trade DSR gate (2026-09-28, historical) | 2/3 automated criteria passed on 205 trades |
+| Paper record (historical, lookahead-inflated) | 205 trades, +$2,157 net, PF 2.08 — **not a trusted forward signal** |
+| Paper record (honest, from 2026-10-06) | New fills at the signal close; accumulating |
+| Max drawdown (historical lifetime) | ~1.6% (vs 15% risk gate threshold) |
 | 50-trade risk review gate | ✅ PASSED (4/4 criteria) |
 | 100-trade strategy review gate | ✅ RUN (2026-08-16) — 2/3 automated criteria passed |
-| **Current execution** | **OANDA practice (demo)** — real REST orders, server-side SL/TP |
+| **Current execution** | **Paper (in-memory sim), honest fills** — `--broker paper` |
 
-> **2026-09-28 — real execution.** The 200-trade DSR gate ran on 205 paper trades: criteria 2
-> (Sharpe band) and 3 (PF ≥ 1.05) passed; criterion 1 (raw DSR ≥ 0.95) failed only because
-> the deflation pool is 4 same-family trials — the correlation-adjusted DSR is 1.00 and the
-> walk-forward DSR 0.997. On that basis D4 moved to a **real OANDA practice (demo) account**
-> (`--broker oanda`): MARKET orders with SL/TP rebased around the live price, closes polled
-> from OANDA, and its record kept in `oanda_practice.sqlite3` (separate from the paper evidence).
-> One honest caveat: real gold spreads (~$0.55) are far wider than the paper sim assumed, so
-> the practice record is the true economic test.
+> **2026-10-06 — practice experiment retired; honest paper-primary.** Every OANDA practice
+> trade closed at a loss. The mechanical causes (stale-feed trading, 1-bar-late entries,
+> wrong recorded SL/TP) were fixed, but the deeper truth is that the paper record that
+> justified practice (PF 2.08) entered at the signal candle's *open* — lookahead. The
+> practice account was the first honest execution and showed the real (marginal, ~PF 1.14)
+> edge. D4 now runs paper-primary (`--broker paper`) with the sim corrected to fill at the
+> signal *close*, a 45-minute freshness gate, and real SL/TP bookkeeping. New paper trades
+> are honest; expect them to look materially worse than the historical PF 2.08.
 
 [Full status →](docs/STATUS.md)
 [Live dashboard →](https://dashboard.auram.software)

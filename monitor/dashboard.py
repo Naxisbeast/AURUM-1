@@ -48,8 +48,10 @@ def main() -> None:
     events = load_event_log(db_path)
     status = get_system_status(db_path, settings)
 
-    # Parallel paper-shadow record (continues the 205-trade evidence trail alongside
-    # the OANDA practice record, via aurum1-d4-paper-shadow.service).
+    # Parallel paper-shadow record (continues the evidence trail alongside the
+    # practice record via aurum1-d4-paper-shadow.service). When the primary record
+    # IS the paper record (paper-primary mode), the shadow is the same file — show
+    # it once, labeled PAPER, rather than double-listing every trade.
     paper_db = ROOT / "aurum1" / "data" / "paper_trading.sqlite3"
     paper_equity_curve = load_equity_curve(str(paper_db)).tail(max_rows)
     paper_trades = load_trade_log(str(paper_db))
@@ -57,17 +59,22 @@ def main() -> None:
         "equity": float(paper_equity_curve["equity"].iloc[-1]) if not paper_equity_curve.empty else 0.0,
         "trade_count": len(paper_trades),
     }
+    same_record = resolve_trading_db(db_path, settings).resolve() == paper_db.resolve()
+    shadow_present = None if same_record else paper_status
+    shadow_curve = None if same_record else paper_equity_curve
+    shadow_trades = None if same_record else paper_trades
+    primary_label = "PAPER" if same_record else "PRACTICE"
 
     st.title("AURUM-1 Live Monitor")
-    render_status_bar(status, paper_status)
+    render_status_bar(status, shadow_present)
     render_evidence_progress()
-    render_equity_curve(equity_curve, settings, paper_equity_curve)
+    render_equity_curve(equity_curve, settings, shadow_curve)
     render_trade_chart(equity_curve, trades, settings)
     render_rolling_metrics(equity_curve, trades, window_days)
     render_open_positions(db_path, settings)
     render_signal_monitor(trades, events, status)
     render_system_health(db_path, settings)
-    render_trade_log(trades, paper_trades)
+    render_trade_log(trades, shadow_trades, primary_label=primary_label)
     render_refresh_timer(int(monitor_settings.get("refresh_interval_sec", 60)))
 
 
@@ -428,18 +435,19 @@ def render_system_health(db_path: str, settings: dict | None = None) -> None:
                     st.write(f"- {r.get('reason', '?')}: {r.get('count', 0)}x")
 
 
-def render_trade_log(trades: pd.DataFrame, paper_trades: pd.DataFrame | None = None) -> None:
-    st.subheader("Trade Log (Practice + Paper shadow)")
+def render_trade_log(trades: pd.DataFrame, paper_trades: pd.DataFrame | None = None,
+                     primary_label: str = "PRACTICE") -> None:
+    st.subheader("Trade Log")
     if paper_trades is not None and not paper_trades.empty:
         practice = trades.copy()
         paper = paper_trades.copy()
-        practice["source"] = "PRACTICE"
+        practice["source"] = primary_label
         paper["source"] = "PAPER"
         trades = pd.concat([practice, paper], ignore_index=True).sort_values("timestamp").reset_index(drop=True)
     else:
         trades = trades.copy()
         if not trades.empty:
-            trades["source"] = "PRACTICE"
+            trades["source"] = primary_label
     if trades.empty:
         st.info("No trade records yet.")
         return

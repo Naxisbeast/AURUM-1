@@ -6,9 +6,11 @@
     "random_seed": 42
   },
   "broker": {
-    # False = real broker execution (OANDA practice/demo for D4). --broker paper
-    # forces True at runtime; this file reflects the deployed practice mode.
-    "paper_trade": false,
+    # True = paper (in-memory) execution, the current primary D4 mode. The OANDA
+    # practice experiment was retired 2026-10-06 (honest fills showed the strategy
+    # was overfitted to the paper sim's lookahead entry). --broker oanda forces
+    # False at runtime for an explicit practice/live run.
+    "paper_trade": true,
     "paper_initial_equity": 10000.0,
     "oanda": {
       "api_key_env": "OANDA_API_KEY",
@@ -118,7 +120,11 @@
     # OANDA entries use MARKET orders (SL/TP rebased around the live price). A LIMIT
     # at the past candle-open never fills at a breakout and leaves orphaned GTC orders.
     "oanda_order_type": "market",
-    "oanda_price_collar_pct": 5.0
+    "oanda_price_collar_pct": 5.0,
+    # Entries are refused when the newest completed M15 candle is older than this.
+    # A frozen forward-shadow feed must not feed live orders (a dead cache within
+    # the 5% price collar would otherwise pass both guards and trade stale signals).
+    "max_stale_candle_age_minutes": 45
   },
   "models": {
     "enable_direction_predictor": false,
@@ -215,8 +221,8 @@
     ]
   },
   "paper_trading": {
-    # Trading-record DB the dashboard resolves as PRIMARY (OANDA practice/demo).
-    # The paper shadow (--broker paper) keeps its record in paper_trading.sqlite3.
-    "db_path": "aurum1/data/oanda_practice.sqlite3"
+    # Trading-record DB the dashboard resolves as PRIMARY. Paper-primary mode:
+    # this is the paper evidence trail (paper_trading.sqlite3).
+    "db_path": "aurum1/data/paper_trading.sqlite3"
   }
 }
